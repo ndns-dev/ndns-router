@@ -1,107 +1,64 @@
 package services
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/sh5080/ndns-router/pkg/interfaces"
 	"github.com/sh5080/ndns-router/pkg/types"
 	"github.com/sh5080/ndns-router/pkg/utils"
 )
 
-// ServerService 서버 관리를 위한 서비스 인터페이스
-type ServerService interface {
-	// 서버 관리
-	AddServer(url string, maxRequests int) error
-	RemoveServer(url string) error
-	GetAllServers() ([]*types.Server, error)
-	GetHealthyServers() ([]*types.Server, error)
-	GetServer(url string) (*types.Server, error)
-
-	// 서버 상태 관리
-	UpdateServerHealth(url string, isHealthy bool) error
-	UpdateServerLoad(url string, load int) error
-	IncrementServerLoad(url string) error
-	DecrementServerLoad(url string) error
-
-	// 동기화 관리
-	StartSync(interval time.Duration) error
-	StopSync() error
-	LoadServersFromStorage() error
-}
-
 // serverServiceImpl 서버 서비스 구현체
 type serverServiceImpl struct {
-	storage types.Storage
-	servers map[string]*types.Server
-	mutex   *sync.RWMutex
-	stopCh  chan struct{}
+	servers          map[string]*types.Server // serverId -> Server 매핑
+	mutex            *sync.RWMutex
+	stopCollection   chan struct{}
+	prometheusClient interfaces.PrometheusService
+	optimalServer    *types.OptimalServer // 최적 서버 정보 저장
 }
 
 // NewServerService 새 서버 서비스 생성
-func NewServerService(storage types.Storage) ServerService {
-	return &serverServiceImpl{
-		storage: storage,
-		servers: make(map[string]*types.Server),
-		mutex:   &sync.RWMutex{},
-		stopCh:  make(chan struct{}),
+func NewServerService(prometheusURL string) (interfaces.ServerService, error) {
+	prometheusClient, err := NewPrometheusService(prometheusURL)
+	if err != nil {
+		return nil, fmt.Errorf("프로메테우스 클라이언트 생성 실패: %w", err)
 	}
+
+	return &serverServiceImpl{
+		servers:          make(map[string]*types.Server),
+		mutex:            &sync.RWMutex{},
+		stopCollection:   make(chan struct{}),
+		prometheusClient: prometheusClient,
+		optimalServer:    nil,
+	}, nil
 }
 
 // AddServer 새 서버 추가
-func (s *serverServiceImpl) AddServer(url string, maxRequests int) error {
+func (s *serverServiceImpl) AddServer(serverId, url string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	// 스토리지에 서버 추가
-	if err := s.storage.AddServer(url); err != nil {
-		return err
-	}
-
-	// 메모리에 서버 객체 생성
 	server := &types.Server{
-		URL:            url,
-		CurrentStatus:  types.StatusUnknown,
-		PreviousStatus: types.StatusUnknown,
-		CurrentLoad:    0,
-		MaxRequests:    maxRequests,
-		IsHealthy:      true,
-		LastUpdated:    time.Now(),
-		LastResponse:   time.Now(),
+		ServerId:      serverId,
+		URL:           url,
+		CurrentStatus: string(types.StatusUnknown),
+		LastUpdated:   time.Now(),
 	}
 
-	s.servers[url] = server
-
-	// 서버 상태 스토리지에 저장
-	state := types.ServerState{
-		URL:         url,
-		Healthy:     true,
-		CurrentLoad: 0,
-		MaxRequests: maxRequests,
-		LastCheck:   time.Now(),
-	}
-
-	if err := s.storage.UpdateServerStatus(state); err != nil {
-		utils.Warnf("서버 상태 저장 실패: %v", err)
-	}
-
-	utils.Infof("서버 추가됨: %s", url)
+	s.servers[serverId] = server
+	utils.Infof("서버 추가됨: %s (%s)", serverId, url)
 	return nil
 }
 
 // RemoveServer 서버 제거
-func (s *serverServiceImpl) RemoveServer(url string) error {
+func (s *serverServiceImpl) RemoveServer(serverId string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	// 스토리지에서 서버 제거
-	if err := s.storage.RemoveServer(url); err != nil {
-		return err
-	}
-
-	// 메모리에서 서버 제거
-	delete(s.servers, url)
-
-	utils.Infof("서버 제거됨: %s", url)
+	delete(s.servers, serverId)
+	utils.Infof("서버 제거됨: %s", serverId)
 	return nil
 }
 
@@ -125,7 +82,7 @@ func (s *serverServiceImpl) GetHealthyServers() ([]*types.Server, error) {
 
 	servers := make([]*types.Server, 0)
 	for _, server := range s.servers {
-		if server.IsHealthy && server.CurrentStatus == types.StatusHealthy {
+		if server.CurrentStatus == string(types.StatusHealthy) {
 			servers = append(servers, server)
 		}
 	}
@@ -134,11 +91,11 @@ func (s *serverServiceImpl) GetHealthyServers() ([]*types.Server, error) {
 }
 
 // GetServer 특정 서버 조회
-func (s *serverServiceImpl) GetServer(url string) (*types.Server, error) {
+func (s *serverServiceImpl) GetServer(serverId string) (*types.Server, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	server, exists := s.servers[url]
+	server, exists := s.servers[serverId]
 	if !exists {
 		return nil, nil
 	}
@@ -146,134 +103,13 @@ func (s *serverServiceImpl) GetServer(url string) (*types.Server, error) {
 	return server, nil
 }
 
-// UpdateServerHealth 서버 건강 상태 업데이트
-func (s *serverServiceImpl) UpdateServerHealth(url string, isHealthy bool) error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	server, exists := s.servers[url]
-	if !exists {
-		return nil
-	}
-
-	// 서버 상태 업데이트
-	if isHealthy {
-		server.UpdateServerStatus(types.StatusHealthy)
-	} else {
-		server.UpdateServerStatus(types.StatusUnhealthy)
-		utils.Infof("서버가 비정상 상태로 표시됨: %s", url)
-	}
-
-	server.LastResponse = time.Now()
-
-	// 스토리지에 상태 업데이트
-	state := types.ServerState{
-		URL:         url,
-		Healthy:     isHealthy,
-		CurrentLoad: server.CurrentLoad,
-		MaxRequests: server.MaxRequests,
-		LastCheck:   time.Now(),
-	}
-
-	if err := s.storage.UpdateServerStatus(state); err != nil {
-		utils.Warnf("스토리지에 서버 상태 업데이트 실패: %v", err)
-		return err
-	}
-
-	return nil
-}
-
-// UpdateServerLoad 서버 부하 정보 업데이트
-func (s *serverServiceImpl) UpdateServerLoad(url string, load int) error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	server, exists := s.servers[url]
-	if !exists {
-		return nil
-	}
-
-	server.CurrentLoad = load
-
-	// 스토리지에 상태 업데이트
-	state := types.ServerState{
-		URL:         url,
-		Healthy:     server.IsHealthy,
-		CurrentLoad: load,
-		MaxRequests: server.MaxRequests,
-		LastCheck:   time.Now(),
-	}
-
-	if err := s.storage.UpdateServerStatus(state); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// IncrementServerLoad 서버 부하 증가
-func (s *serverServiceImpl) IncrementServerLoad(url string) error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	server, exists := s.servers[url]
-	if !exists {
-		return nil
-	}
-
-	server.IncrementActiveRequests()
-
-	// 스토리지에 상태 업데이트
-	state := types.ServerState{
-		URL:         url,
-		Healthy:     server.IsHealthy,
-		CurrentLoad: server.CurrentLoad,
-		MaxRequests: server.MaxRequests,
-		LastCheck:   time.Now(),
-	}
-
-	if err := s.storage.UpdateServerStatus(state); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// DecrementServerLoad 서버 부하 감소
-func (s *serverServiceImpl) DecrementServerLoad(url string) error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	server, exists := s.servers[url]
-	if !exists {
-		return nil
-	}
-
-	server.DecrementActiveRequests()
-
-	// 스토리지에 상태 업데이트
-	state := types.ServerState{
-		URL:         url,
-		Healthy:     server.IsHealthy,
-		CurrentLoad: server.CurrentLoad,
-		MaxRequests: server.MaxRequests,
-		LastCheck:   time.Now(),
-	}
-
-	if err := s.storage.UpdateServerStatus(state); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// StartSync 서버 목록 동기화 시작
-func (s *serverServiceImpl) StartSync(interval time.Duration) error {
+// StartMetricsCollection 메트릭 수집 시작
+func (s *serverServiceImpl) StartMetricsCollection(interval time.Duration) error {
 	if interval == 0 {
 		interval = 30 * time.Second
 	}
 
-	utils.Infof("서버 동기화 시작 (간격: %s)", interval)
+	utils.Infof("메트릭 수집 시작 (간격: %s)", interval)
 
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -282,11 +118,11 @@ func (s *serverServiceImpl) StartSync(interval time.Duration) error {
 		for {
 			select {
 			case <-ticker.C:
-				if err := s.syncServersFromStorage(); err != nil {
-					utils.Warnf("서버 목록 동기화 실패: %v", err)
+				if err := s.collectMetrics(); err != nil {
+					utils.Warnf("메트릭 수집 실패: %v", err)
 				}
-			case <-s.stopCh:
-				utils.Info("서버 동기화 중지됨")
+			case <-s.stopCollection:
+				utils.Info("메트릭 수집 중지됨")
 				return
 			}
 		}
@@ -295,144 +131,75 @@ func (s *serverServiceImpl) StartSync(interval time.Duration) error {
 	return nil
 }
 
-// StopSync 서버 목록 동기화 중지
-func (s *serverServiceImpl) StopSync() error {
-	close(s.stopCh)
+// StopMetricsCollection 메트릭 수집 중지
+func (s *serverServiceImpl) StopMetricsCollection() error {
+	close(s.stopCollection)
 	return nil
 }
 
-// syncServersFromStorage는 스토리지에서 서버 정보를 동기화합니다
-func (s *serverServiceImpl) syncServersFromStorage() error {
-	// 스토리지에서 모든 서버 URL 조회
-	urls, err := s.storage.GetAllServers()
-	if err != nil {
-		return err
-	}
-
-	// 현재 메모리에 있는 서버 URL 맵 생성 (O(1) 검색을 위해)
+// collectMetrics 프로메테우스에서 메트릭 수집
+func (s *serverServiceImpl) collectMetrics() error {
 	s.mutex.RLock()
-	existingServers := make(map[string]bool)
-	for url := range s.servers {
-		existingServers[url] = true
+	servers := make([]*types.Server, 0, len(s.servers))
+	for _, server := range s.servers {
+		servers = append(servers, server)
 	}
 	s.mutex.RUnlock()
 
-	// 새로운 서버를 메모리에 추가
-	for _, url := range urls {
-		if !existingServers[url] {
-			// 새 서버 발견, 상세 정보 로드
-			state, err := s.storage.GetServerStatus(url)
-			if err != nil {
-				utils.Warnf("새 서버(%s) 상태 조회 실패: %v", url, err)
-				continue
-			}
-
-			// URL이 비어있는 경우, 키로 사용된 URL을 설정
-			if state.URL == "" {
-				state.URL = url
-			}
-
-			// 메모리에 서버 객체 생성
-			status := types.StatusUnknown
-			if state.Healthy {
-				status = types.StatusHealthy
-			} else {
-				status = types.StatusUnhealthy
-			}
-
-			server := &types.Server{
-				URL:            url,
-				CurrentStatus:  status,
-				PreviousStatus: types.StatusUnknown,
-				CurrentLoad:    state.CurrentLoad,
-				MaxRequests:    state.MaxRequests,
-				IsHealthy:      state.Healthy,
-				LastUpdated:    time.Now(),
-				LastResponse:   state.LastCheck,
-			}
-
-			// 메모리에 서버 추가
-			s.mutex.Lock()
-			s.servers[url] = server
-			s.mutex.Unlock()
-
-			utils.Infof("새 서버 추가됨: %s (건강: %v, 부하: %d/%d)",
-				url, state.Healthy, state.CurrentLoad, state.MaxRequests)
+	for _, server := range servers {
+		metrics, err := s.prometheusClient.CollectMetrics(server.ServerId)
+		if err != nil {
+			utils.Errorf("메트릭 수집 실패 (%s): %v", server.ServerId, err)
+			continue
 		}
+
+		s.mutex.Lock()
+		server.Metrics = metrics
+		server.CurrentStatus = string(utils.EvaluateServerHealth(metrics))
+		server.LastUpdated = time.Now()
+
+		// 최적 서버 업데이트 (받은 점수 기준)
+		if s.optimalServer == nil || metrics.Score > s.optimalServer.Score {
+			s.optimalServer = &types.OptimalServer{
+				ServerId: server.ServerId,
+				Score:    metrics.Score,
+			}
+			utils.Infof("새로운 최적 서버가 선택되었습니다: %s (점수: %.2f)", server.ServerId, metrics.Score)
+		}
+		s.mutex.Unlock()
 	}
-
-	// 메모리에서 삭제된 서버 제거
-	s.mutex.Lock()
-	for url := range s.servers {
-		found := false
-		for _, storageURL := range urls {
-			if url == storageURL {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			// 서버가 스토리지에서 제거됨, 메모리에서도 제거
-			delete(s.servers, url)
-			utils.Infof("서버 제거됨: %s (더 이상 스토리지에 존재하지 않음)", url)
-		}
-	}
-	s.mutex.Unlock()
 
 	return nil
 }
 
-// LoadServersFromStorage 스토리지에서 서버 목록을 불러와 메모리에 로드
-func (s *serverServiceImpl) LoadServersFromStorage() error {
-	// 스토리지에서 모든 서버 URL 조회
-	urls, err := s.storage.GetAllServers()
-	if err != nil {
-		return err
-	}
-
+// UpdateServerMetrics 서버 메트릭 업데이트
+func (s *serverServiceImpl) UpdateServerMetrics(serverId string, metrics *types.Metrics) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	// 기존 서버 맵 초기화
-	s.servers = make(map[string]*types.Server)
-
-	// 새로운 서버 목록 로드
-	for _, url := range urls {
-		// 서버 상태 조회
-		state, err := s.storage.GetServerStatus(url)
-		if err != nil {
-			utils.Warnf("서버 상태 조회 실패 (%s): %v", url, err)
-			continue
-		}
-
-		// URL 필드가 비어있는 경우, 키로 사용된 URL을 설정
-		if state.URL == "" {
-			state.URL = url
-		}
-
-		// 메모리에 서버 객체 생성
-		status := types.StatusUnknown
-		if state.Healthy {
-			status = types.StatusHealthy
-		} else {
-			status = types.StatusUnhealthy
-		}
-
-		server := &types.Server{
-			URL:            url,
-			CurrentStatus:  status,
-			PreviousStatus: types.StatusUnknown,
-			CurrentLoad:    state.CurrentLoad,
-			MaxRequests:    state.MaxRequests,
-			IsHealthy:      state.Healthy,
-			LastUpdated:    time.Now(),
-			LastResponse:   state.LastCheck,
-		}
-
-		s.servers[url] = server
+	server, exists := s.servers[serverId]
+	if !exists {
+		return fmt.Errorf("서버가 존재하지 않습니다: %s", serverId)
 	}
 
-	utils.Infof("스토리지에서 %d개 서버 로드 완료", len(s.servers))
+	server.Metrics = metrics
+	server.LastUpdated = time.Now()
+
+	// 최적 서버 업데이트 (받은 점수 기준)
+	if s.optimalServer == nil || metrics.Score > s.optimalServer.Score {
+		s.optimalServer = &types.OptimalServer{
+			ServerId: serverId,
+			Score:    metrics.Score,
+		}
+		utils.Infof("새로운 최적 서버가 선택되었습니다: %s (점수: %.2f)", serverId, metrics.Score)
+	}
+
 	return nil
+}
+
+// GetOptimalServer 현재 최적 서버 정보 반환
+func (s *serverServiceImpl) GetOptimalServer() *types.OptimalServer {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.optimalServer
 }
