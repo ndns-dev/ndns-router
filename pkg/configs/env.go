@@ -1,22 +1,75 @@
 package configs
 
 import (
-	"strings"
 	"sync"
+	"time"
 
+	"github.com/caarlos0/env/v6"
+	"github.com/joho/godotenv"
 	"github.com/sh5080/ndns-router/pkg/utils"
-	"github.com/spf13/viper"
 )
 
-// RouterConfig는 라우터 관련 환경 설정을 저장하는 구조체입니다
+// RouterConfig는 라우터의 설정을 정의합니다
 type RouterConfig struct {
+	// 서버 설정
 	Server struct {
-		Port        int      `mapstructure:"PORT"`
-		AppEnv      string   `mapstructure:"APP_ENV"`
-		ServerList  []string `mapstructure:"SERVER_LIST"`
-		MaxRequests int      `mapstructure:"MAX_REQUESTS"`
+		Port   int    `env:"PORT,required"`
+		AppEnv string `env:"APP_ENV,required"`
 	}
-	RedisURL string `mapstructure:"REDIS_URL"`
+
+	// 프로메테우스 설정
+	PrometheusURL string `env:"PROMETHEUS_URL" envDefault:"http://localhost:9090"`
+
+	// 서버리스 설정
+	Serverless struct {
+		Servers []string `env:"SERVERLESS_SERVERS" envSeparator:","`
+		Weight  int      `env:"SERVERLESS_WEIGHT" envDefault:"30"` // 서버리스 라우팅 가중치 (%)
+	}
+
+	// 온프레미스 설정
+	OnPremise struct {
+		Weight int `env:"ONPREM_WEIGHT" envDefault:"70"` // 온프레미스 라우팅 가중치 (%)
+	}
+
+	// 헬스체크 설정
+	HealthCheck struct {
+		Interval    int `env:"HEALTH_CHECK_INTERVAL" envDefault:"30"`   // 헬스체크 간격 (초)
+		MaxRetries  int `env:"HEALTH_CHECK_MAX_RETRIES" envDefault:"3"` // 최대 재시도 횟수
+		TimeoutSecs int `env:"HEALTH_CHECK_TIMEOUT" envDefault:"5"`     // 타임아웃 (초)
+	}
+
+	// 라우팅 설정
+	Routing struct {
+		// 온프레미스 API 설정
+		OnPremise struct {
+			Servers             []string      `env:"ONPREM_SERVERS" envSeparator:","`
+			HealthCheckInterval time.Duration `env:"ONPREM_HEALTH_CHECK_INTERVAL" envDefault:"30s"`
+			HealthCheckTimeout  time.Duration `env:"ONPREM_HEALTH_CHECK_TIMEOUT" envDefault:"5s"`
+			RetryAttempts       int           `env:"ONPREM_RETRY_ATTEMPTS" envDefault:"3"`
+			RetryDelay          time.Duration `env:"ONPREM_RETRY_DELAY" envDefault:"1s"`
+		}
+
+		// 서버리스 API 설정
+		Serverless struct {
+			CloudRunURL string `env:"CLOUD_RUN_URL,required"`
+			LambdaURL   string `env:"LAMBDA_URL,required"`
+			// 서버리스로 전환하는 조건
+			FailoverThreshold struct {
+				ErrorRate    float64 `env:"FAILOVER_ERROR_RATE" envDefault:"50"`      // 50% 이상 에러율
+				ResponseTime float64 `env:"FAILOVER_RESPONSE_TIME" envDefault:"5000"` // 5000ms 이상 응답시간
+				CPUUsage     float64 `env:"FAILOVER_CPU_USAGE" envDefault:"90"`       // 90% 이상 CPU 사용률
+				MemoryUsage  float64 `env:"FAILOVER_MEMORY_USAGE" envDefault:"90"`    // 90% 이상 메모리 사용률
+				HealthScore  float64 `env:"FAILOVER_HEALTH_SCORE" envDefault:"30"`    // 30점 이하 헬스스코어
+			}
+		}
+
+		// 라우팅 가중치 (퍼센트)
+		WeightDistribution struct {
+			OnPremise int `env:"WEIGHT_ONPREMISE" envDefault:"70"` // 온프레미스 라우팅 비율
+			CloudRun  int `env:"WEIGHT_CLOUD_RUN" envDefault:"15"` // Cloud Run 라우팅 비율
+			Lambda    int `env:"WEIGHT_LAMBDA" envDefault:"15"`    // Lambda 라우팅 비율
+		}
+	}
 }
 
 var (
@@ -24,111 +77,27 @@ var (
 	once           sync.Once
 )
 
-// loadConfig는 환경 변수를 로드하고 검증하는 내부 함수
-func loadConfig() *RouterConfig {
-	// Viper 초기화
-	v := viper.New()
-	v.AutomaticEnv()
-	v.SetConfigFile(".env")
-
-	// .env 파일 로드 (있는 경우만)
-	if err := v.ReadInConfig(); err != nil {
-		utils.Warnf(".env 파일 로드 실패: %v", err)
-	}
-
-	// 필수 환경 변수 목록
-	requiredEnvVars := []string{
-		"SERVER_LIST",
-	}
-
-	// Redis 관련 필수 환경 변수 (URL 또는 주소와 비밀번호)
-	redisEnvVars := []string{
-		"REDIS_URL",
-	}
-
-	// 필수 환경 변수 확인
-	missingVars := []string{}
-	for _, envVar := range requiredEnvVars {
-		if !v.IsSet(envVar) || v.GetString(envVar) == "" {
-			missingVars = append(missingVars, envVar)
-		}
-	}
-
-	// Redis 관련 환경 변수 중 최소 하나는 있어야 함
-	redisConfigFound := false
-	for _, envVar := range redisEnvVars {
-		if v.IsSet(envVar) && v.GetString(envVar) != "" {
-			redisConfigFound = true
-			break
-		}
-	}
-
-	if !redisConfigFound {
-		missingVars = append(missingVars, "REDIS_URL 또는 REDIS_ADDR")
-	}
-
-	// 필수 환경 변수가 없으면 에러 로깅 후 종료
-	if len(missingVars) > 0 {
-		utils.Fatalf("필수 환경 변수가 설정되지 않았습니다: %s", strings.Join(missingVars, ", "))
-	}
-
-	// 구성 인스턴스 생성
-	conf := &RouterConfig{}
-
-	// 서버 설정 로드
-	conf.Server.Port = v.GetInt("PORT")
-	conf.Server.AppEnv = v.GetString("APP_ENV")
-	conf.Server.MaxRequests = v.GetInt("MAX_REQUESTS")
-
-	// 서버 목록 로드
-	serverListStr := v.GetString("SERVER_LIST")
-	if serverListStr != "" {
-		// 쉼표로 구분된 목록 파싱
-		serverList := strings.Split(serverListStr, ",")
-		for i, url := range serverList {
-			url = strings.TrimSpace(url)
-			// http:// 접두사 확인 및 추가
-			if url != "" && !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-				url = "http://" + url
-			}
-			if url != "" {
-				serverList[i] = url
-			}
-		}
-		// 빈 URL 필터링
-		filteredList := []string{}
-		for _, url := range serverList {
-			if url != "" {
-				filteredList = append(filteredList, url)
-			}
-		}
-		conf.Server.ServerList = filteredList
-	} else {
-		conf.Server.ServerList = []string{}
-	}
-
-	// Redis 설정 로드
-	conf.RedisURL = v.GetString("REDIS_URL")
-
-	// 구성 정보 로깅
-	utils.Infof("로드 완료 (환경: %s, 포트: %d, 최대 요청 수: %d)",
-		conf.Server.AppEnv, conf.Server.Port, conf.Server.MaxRequests)
-
-	if len(conf.Server.ServerList) > 0 {
-		utils.Infof("서버 목록: %d개 서버", len(conf.Server.ServerList))
-	} else {
-		utils.Infof("서버 목록이 비어 있습니다.")
-	}
-
-	return conf
-}
-
-// GetConfig는 RouterConfig의 싱글톤 인스턴스를 반환합니다.
-// 처음 호출 시에만 환경 변수를 로드하고 이후 호출에서는 캐시된 인스턴스를 반환합니다.
+// GetConfig는 싱글톤 패턴으로 설정을 반환합니다
 func GetConfig() *RouterConfig {
 	once.Do(func() {
-		configInstance = loadConfig()
-		utils.Infof("환경 변수 로드 완료")
+		// .env 파일 로드
+		if err := godotenv.Load(); err != nil {
+			utils.Warnf(".env 파일 로드 실패: %v", err)
+		}
+
+		config := &RouterConfig{}
+		if err := env.Parse(config); err != nil {
+			utils.Fatalf("환경 변수 로드 실패: %v", err)
+		}
+
+		// 가중치 합이 100인지 검증
+		weights := config.Routing.WeightDistribution
+		totalWeight := weights.OnPremise + weights.CloudRun + weights.Lambda
+		if totalWeight != 100 {
+			utils.Fatalf("라우팅 가중치의 합이 100이 아닙니다: %d", totalWeight)
+		}
+
+		configInstance = config
 	})
 	return configInstance
 }
