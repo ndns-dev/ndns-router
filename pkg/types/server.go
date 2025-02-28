@@ -29,3 +29,14 @@ type Server struct {
 	LastUpdated   time.Time `json:"lastUpdated"`
 	Metrics       *Metrics  `json:"metrics,omitempty"`
 }
+
+// Metrics represents server metrics
+type Metrics struct {
+	CPUUsage    float64   `json:"cpuUsage"`     // CPU 사용량 (0-1)
+	MemoryUsage float64   `json:"memoryUsage"`  // 메모리 사용량 (bytes)
+	RequestRate float64   `json:"requestRate"`  // 초당 요청 수
+	ErrorRate   float64   `json:"errorRate"`    // 에러율 (0-1)
+	Latency     float64   `json:"responseTime"` // 응답 시간 (초)
+	Score       float64   `json:"score"`        // 서버 점수 (0-100)
+	Timestamp   time.Time `json:"timestamp"`    // 메트릭 수집 시간
+}
