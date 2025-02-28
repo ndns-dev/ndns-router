@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/signal"
 	"runtime"
 	"syscall"
 
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/sh5080/ndns-router/pkg/configs"
-	"github.com/sh5080/ndns-router/pkg/router"
+	"github.com/sh5080/ndns-router/pkg/routers"
 	"github.com/sh5080/ndns-router/pkg/utils"
 )
 
@@ -19,29 +24,54 @@ const (
 func main() {
 	// 앱 설정 로드
 	config := configs.GetConfig()
-	utils.Infof("설정 로드 완료 (환경: %s, 포트: %d, 최대 요청 수: %d)", config.Server.AppEnv, config.Server.Port, config.Server.MaxRequests)
-	utils.Infof("서버 목록: %d개 서버", len(config.Server.ServerList))
+	utils.Infof("설정 로드 완료 (환경: %s, 포트: %d)", config.Server.AppEnv, config.Server.Port)
 
 	// 시스템 정보 출력
 	printSystemInfo()
-	utils.Info("환경 변수 로드 완료")
 
-	// 라우터 서비스 생성 및 시작
-	utils.Infof("NDNS Router 시작 중 (버전: %s, 환경: %s)", Version, config.Server.AppEnv)
-	routerService := router.NewRouterService(config, Version)
-	routerService.Start()
+	// Fiber 앱 설정
+	app := fiber.New(fiber.Config{
+		AppName:        "NDNS Router",
+		ServerHeader:   "NDNS Router",
+		ProxyHeader:    "X-Forwarded-For",
+		BodyLimit:      10 * 1024 * 1024, // 10MB
+		ReadBufferSize: 16384,            // 16KB
+		JSONDecoder:    json.Unmarshal,
+	})
+	app.Use(logger.New())
 
-	// 우아한 종료 처리
-	signalCh := make(chan os.Signal, 1)
-	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
+	// 라우터 설정
+	if err := routers.SetupRoutes(app, config); err != nil {
+		utils.Fatalf("라우터 설정 실패: %v", err)
+	}
 
-	// 종료 대기
-	<-signalCh
-	utils.Info("종료 신호 감지. 서버를 종료합니다...")
+	// 컨텍스트 생성
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// 마무리 작업
-	routerService.Shutdown()
-	utils.Info("서버가 안전하게 종료되었습니다.")
+	// 서버 시작
+	go func() {
+		port := config.Server.Port
+		if err := app.Listen(fmt.Sprintf(":%d", port)); err != nil {
+			utils.Fatalf("서버 시작 실패: %v", err)
+		}
+	}()
+
+	// 종료 시그널 처리
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case <-sigCh:
+		utils.Info("종료 시그널을 받았습니다. 서버를 종료합니다...")
+	case <-ctx.Done():
+		utils.Info("컨텍스트가 취소되었습니다. 서버를 종료합니다...")
+	}
+
+	// 서버 종료
+	if err := app.Shutdown(); err != nil {
+		utils.Errorf("서버 종료 실패: %v", err)
+	}
 }
 
 // 시스템 정보 출력
