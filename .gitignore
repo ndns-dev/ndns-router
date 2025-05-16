@@ -28,4 +28,4 @@ vendor/
 .env
 *.pem
 *.log
-ndns-go
+ndns-router
