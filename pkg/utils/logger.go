@@ -17,6 +17,10 @@ var (
 
 	// 기본 로거 인스턴스
 	logger = NewLogger()
+
+	infoLogger  = log.New(os.Stdout, "INFO: ", log.Ldate|log.Ltime)
+	errorLogger = log.New(os.Stderr, "ERROR: ", log.Ldate|log.Ltime)
+	fatalLogger = log.New(os.Stderr, "FATAL: ", log.Ldate|log.Ltime)
 )
 
 // Logger는 애플리케이션의 로깅을 담당하는 구조체입니다
@@ -113,13 +117,13 @@ func Debugf(format string, args ...interface{}) {
 }
 
 // Info는 정보 레벨 로그를 출력합니다
-func Info(message string) {
-	logger.Info(message)
+func Info(msg string) {
+	infoLogger.Println(msg)
 }
 
-// Infof는 형식화된 정보 레벨 로그를 출력합니다
+// Infof는 포맷된 정보 메시지를 로깅합니다
 func Infof(format string, args ...interface{}) {
-	logger.Infof(format, args...)
+	infoLogger.Printf(format+"\n", args...)
 }
 
 // Warn은 경고 레벨 로그를 출력합니다
@@ -132,22 +136,24 @@ func Warnf(format string, args ...interface{}) {
 	logger.Warnf(format, args...)
 }
 
-// Error는 오류 레벨 로그를 출력합니다
-func Error(message string) {
-	logger.Error(message)
+// Error는 에러 메시지를 로깅합니다
+func Error(msg string) {
+	errorLogger.Println(msg)
 }
 
-// Errorf는 형식화된 오류 레벨 로그를 출력합니다
+// Errorf는 포맷된 에러 메시지를 로깅합니다
 func Errorf(format string, args ...interface{}) {
-	logger.Errorf(format, args...)
+	errorLogger.Printf(format+"\n", args...)
 }
 
-// Fatal은 치명적 오류 로그를 출력하고 프로그램을 종료합니다
-func Fatal(message string) {
-	logger.Fatal(message)
+// Fatal은 치명적인 에러를 로깅하고 프로그램을 종료합니다
+func Fatal(msg string) {
+	fatalLogger.Println(msg)
+	os.Exit(1)
 }
 
-// Fatalf는 형식화된 치명적 오류 로그를 출력하고 프로그램을 종료합니다
+// Fatalf는 포맷된 치명적인 에러를 로깅하고 프로그램을 종료합니다
 func Fatalf(format string, args ...interface{}) {
-	logger.Fatalf(format, args...)
+	fatalLogger.Printf(format+"\n", args...)
+	os.Exit(1)
 }
