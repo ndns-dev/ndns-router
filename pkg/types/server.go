@@ -40,3 +40,17 @@ type Metrics struct {
 	Score       float64   `json:"score"`        // 서버 점수 (0-100)
 	Timestamp   time.Time `json:"timestamp"`    // 메트릭 수집 시간
 }
+
+// OptimalServerRequest는 최적 서버 등록 요청 구조체입니다
+type OptimalServerRequest struct {
+	Servers []struct {
+		ServerId string `json:"serverId"`
+		Metrics  struct {
+			CpuUsage     float64 `json:"cpuUsage"`
+			MemoryUsage  float64 `json:"memoryUsage"`
+			ErrorRate    float64 `json:"errorRate"`
+			ResponseTime float64 `json:"responseTime"`
+			Score        float64 `json:"score"`
+		} `json:"metrics"`
+	} `json:"servers"`
+}

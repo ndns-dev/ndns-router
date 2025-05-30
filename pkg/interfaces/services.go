@@ -13,7 +13,9 @@ type ServerService interface {
 	GetHealthyServers() ([]*types.Server, error)
 	GetServer(serverId string) (*types.Server, error)
 	UpdateServerMetrics(serverId string, metrics *types.Metrics) error
-	GetOptimalServer() *types.OptimalServer
+	SelectOptimalServer() *types.Server
+	GetServerlessServer() *types.Server
+	FinishUsingServer(serverId string)
 }
 
 // RouterService는 라우터 서비스 인터페이스입니다
