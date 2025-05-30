@@ -9,7 +9,6 @@ import (
 	"github.com/sh5080/ndns-router/pkg/utils"
 )
 
-// InternalController는 /api/internal 경로의 요청을 처리하는 컨트롤러입니다
 type InternalController struct {
 	serverService interfaces.ServerService
 }
@@ -21,27 +20,13 @@ func NewInternalController(serverService interfaces.ServerService) *InternalCont
 	}
 }
 
-// OptimalServerRequest는 최적 서버 등록 요청 구조체입니다
-type OptimalServerRequest struct {
-	Servers []struct {
-		ServerId string `json:"serverId"`
-		Metrics  struct {
-			CpuUsage     float64 `json:"cpuUsage"`
-			MemoryUsage  float64 `json:"memoryUsage"`
-			ErrorRate    float64 `json:"errorRate"`
-			ResponseTime float64 `json:"responseTime"`
-			Score        float64 `json:"score"`
-		} `json:"metrics"`
-	} `json:"servers"`
-}
-
 // HandleOptimalServer는 최적 서버 등록 요청을 처리합니다
 func (c *InternalController) HandleOptimalServer(ctx *fiber.Ctx) error {
 	// 원본 요청 바디 로깅
 	body := ctx.Body()
 	utils.Infof("수신된 원본 요청 바디 (길이: %d): %s", len(body), string(body))
 
-	var req OptimalServerRequest
+	var req types.OptimalServerRequest
 	if err := ctx.BodyParser(&req); err != nil {
 		utils.Errorf("요청 파싱 실패: %v", err)
 		utils.Infof("기대하는 요청 형식: %s", `{
