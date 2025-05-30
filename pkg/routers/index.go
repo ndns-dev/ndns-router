@@ -16,29 +16,24 @@ func SetupRoutes(app *fiber.App, config *types.RouterConfig) error {
 		return err
 	}
 
-	// API 라우터 그룹
-	api := app.Group("/api")
+	// 프록시 미들웨어를 먼저 설정 (모든 요청에 대해 먼저 검사)
+	app.Use(middlewares.NewProxyMiddleware(serverService))
 
-	// 서버 관련 라우터 (/api/servers/*)
-	servers := api.Group("/servers")
+	// 내부 관리용 라우터 설정
+	servers := app.Group("/servers")
 	if err := SetupServerRoutes(servers, serverService); err != nil {
 		return err
 	}
 
-	// 메트릭 관련 라우터 (/api/metrics/*)
-	metrics := api.Group("/metrics")
+	metrics := app.Group("/metrics")
 	if err := SetupMetricsRoutes(metrics, serverService); err != nil {
 		return err
 	}
 
-	// Internal API 라우터 (/api/internal/*)
-	internal := api.Group("/internal")
+	internal := app.Group("/internal")
 	if err := SetupInternalRoutes(internal, serverService); err != nil {
 		return err
 	}
-
-	// 프록시 미들웨어 설정 (/)
-	app.Use(middlewares.NewProxyMiddleware(serverService))
 
 	utils.Info("라우터 설정이 완료되었습니다")
 	return nil
