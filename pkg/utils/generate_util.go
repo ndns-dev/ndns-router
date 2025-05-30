@@ -1,6 +1,42 @@
 package utils
 
-import "sync/atomic"
+import (
+	"fmt"
+	"sync/atomic"
+	"time"
+)
+
+// Generate 요청 id 생성 및 라운드 로빈 인덱스 반환
+type Generate struct {
+	requestCounter uint64
+	currentIndex   uint32
+}
+
+// NewGenerate 생성
+func NewGenerate() *Generate {
+	return &Generate{
+		requestCounter: 0,
+		currentIndex:   0,
+	}
+}
+
+// 요청 id 생성
+func (g *Generate) GenerateRequestId() string {
+	count := atomic.AddUint64(&g.requestCounter, 1)
+	return fmt.Sprintf("REQ-%s-%06d",
+		time.Now().Format("20060102-150405"),
+		count,
+	)
+}
+
+// 다음 라운드 로빈 인덱스 반환
+func (g *Generate) NextRoundRobinIndex(length int) int {
+	if length <= 0 {
+		return -1
+	}
+	index := atomic.AddUint32(&g.currentIndex, 1)
+	return int(index-1) % length
+}
 
 // RoundRobin은 라운드 로빈 로드 밸런싱을 구현합니다
 type RoundRobin struct {
