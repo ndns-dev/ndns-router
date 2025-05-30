@@ -5,26 +5,37 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sh5080/ndns-router/pkg/configs"
 	"github.com/sh5080/ndns-router/pkg/interfaces"
 	"github.com/sh5080/ndns-router/pkg/types"
 	"github.com/sh5080/ndns-router/pkg/utils"
 )
 
-// serverServiceImpl 서버 서비스 구현체
-type serverServiceImpl struct {
-	servers        map[string]*types.Server // serverId -> Server 매핑
-	mutex          *sync.RWMutex
-	stopCollection chan struct{}
-	optimalServer  *types.OptimalServer // 최적 서버 정보 저장
+// ServerState는 서버의 현재 상태를 관리합니다
+type ServerState struct {
+	ActiveRequests int       // 현재 활성 요청 수
+	LastUsedTime   time.Time // 마지막 사용 시간
+	mutex          sync.Mutex
 }
 
-// NewServerService 새 서버 서비스 생성
+// serverServiceImpl implements the ServerService interface
+type serverServiceImpl struct {
+	servers          map[string]*types.Server
+	serverStates     map[string]*ServerState
+	mutex            sync.RWMutex
+	stopCollection   chan struct{}
+	optimalServer    *types.OptimalServer // 최적 서버 정보 저장
+	serverlessServer *types.Server
+}
+
+// NewServerService creates a new instance of ServerService
 func NewServerService() (interfaces.ServerService, error) {
 	return &serverServiceImpl{
-		servers:        make(map[string]*types.Server),
-		mutex:          &sync.RWMutex{},
-		stopCollection: make(chan struct{}),
-		optimalServer:  nil,
+		servers:          make(map[string]*types.Server),
+		serverStates:     make(map[string]*ServerState),
+		stopCollection:   make(chan struct{}),
+		optimalServer:    nil,
+		serverlessServer: nil,
 	}, nil
 }
 
@@ -96,7 +107,134 @@ func (s *serverServiceImpl) GetServer(serverId string) (*types.Server, error) {
 	return server, nil
 }
 
-// UpdateServerMetrics 서버 메트릭 업데이트
+// canUseServer checks if a server can be used based on concurrent requests and cooldown
+func (s *serverServiceImpl) canUseServer(serverId string) bool {
+	s.mutex.RLock()
+	state, exists := s.serverStates[serverId]
+	s.mutex.RUnlock()
+
+	if !exists {
+		s.mutex.Lock()
+		s.serverStates[serverId] = &ServerState{}
+		s.mutex.Unlock()
+		return true
+	}
+
+	state.mutex.Lock()
+	defer state.mutex.Unlock()
+
+	if state.ActiveRequests >= configs.MaxConcurrentRequests {
+		return false
+	}
+
+	if time.Since(state.LastUsedTime) < configs.CooldownPeriod {
+		return false
+	}
+
+	return true
+}
+
+// startUsingServer marks a server as being used
+func (s *serverServiceImpl) startUsingServer(serverId string) {
+	s.mutex.RLock()
+	state, exists := s.serverStates[serverId]
+	s.mutex.RUnlock()
+
+	if !exists {
+		s.mutex.Lock()
+		state = &ServerState{}
+		s.serverStates[serverId] = state
+		s.mutex.Unlock()
+	}
+
+	state.mutex.Lock()
+	state.ActiveRequests++
+	state.LastUsedTime = time.Now()
+	state.mutex.Unlock()
+}
+
+// FinishUsingServer marks a server as no longer being used
+func (s *serverServiceImpl) FinishUsingServer(serverId string) {
+	s.mutex.RLock()
+	state, exists := s.serverStates[serverId]
+	s.mutex.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	state.mutex.Lock()
+	if state.ActiveRequests > 0 {
+		state.ActiveRequests--
+	}
+	state.mutex.Unlock()
+}
+
+// SelectOptimalServer selects the best server based on metrics and availability
+func (s *serverServiceImpl) SelectOptimalServer() *types.Server {
+	// 서버리스 강제 사용 비율 체크
+	if utils.NewCalculate().RandomFloat64() < configs.ServerlessForceRatio {
+		utils.Info("서버리스로 강제 전환 (부하 분산)")
+		return s.GetServerlessServer()
+	}
+
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	var excellentServers []*types.Server
+	var goodServers []*types.Server
+
+	for _, server := range s.servers {
+		if !s.canUseServer(server.ServerId) {
+			continue
+		}
+
+		if server.Metrics.Score >= configs.ScoreExcellent {
+			excellentServers = append(excellentServers, server)
+		} else if server.Metrics.Score >= configs.ScoreGood {
+			goodServers = append(goodServers, server)
+		}
+	}
+
+	var selectedServer *types.Server
+	if len(excellentServers) > 0 {
+		selectedServer = s.selectRandomServer(excellentServers)
+		utils.Infof("최상위 서버 선택: %s (점수: %.2f)", selectedServer.ServerId, selectedServer.Metrics.Score)
+	} else if len(goodServers) > 0 {
+		selectedServer = s.selectRandomServer(goodServers)
+		utils.Infof("양호 서버 선택: %s (점수: %.2f)", selectedServer.ServerId, selectedServer.Metrics.Score)
+	} else {
+		utils.Info("적합한 서버가 없어 서버리스로 전환")
+		return s.GetServerlessServer()
+	}
+
+	s.startUsingServer(selectedServer.ServerId)
+	return selectedServer
+}
+
+// GetServerlessServer returns a serverless server instance
+func (s *serverServiceImpl) GetServerlessServer() *types.Server {
+	serverIndex := utils.NewGenerate().NextRoundRobinIndex(len(configs.GetConfig().Serverless.Servers))
+	selectedServer := configs.GetConfig().Serverless.Servers[serverIndex]
+
+	return &types.Server{
+		ServerId: selectedServer,
+		URL:      selectedServer,
+		Metrics: &types.Metrics{
+			Score: 100,
+		},
+	}
+}
+
+// selectRandomServer randomly selects a server from the given list
+func (s *serverServiceImpl) selectRandomServer(servers []*types.Server) *types.Server {
+	if len(servers) == 0 {
+		return nil
+	}
+	return servers[utils.NewCalculate().RandomInt(len(servers))]
+}
+
+// UpdateServerMetrics updates server metrics
 func (s *serverServiceImpl) UpdateServerMetrics(serverId string, metrics *types.Metrics) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -119,11 +257,4 @@ func (s *serverServiceImpl) UpdateServerMetrics(serverId string, metrics *types.
 	}
 
 	return nil
-}
-
-// GetOptimalServer 현재 최적 서버 정보 반환
-func (s *serverServiceImpl) GetOptimalServer() *types.OptimalServer {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-	return s.optimalServer
 }
