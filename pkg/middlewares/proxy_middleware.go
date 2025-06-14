@@ -16,6 +16,12 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 
 	// 서버 요청 시도
 	tryServer := func(c *fiber.Ctx, server *types.Server, requestId string) error {
+		if server == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "서버가 없음")
+		}
+
+		utils.Infof("[%s] 서버 시도: %s (점수: %.2f)", requestId, server.ServerId, server.Metrics.Score)
+
 		// [1] URL 정규화
 		targetURL := server.URL
 		if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
@@ -36,7 +42,47 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 		c.Request().Header.Set("X-Request-ID", requestId)
 
 		// [4] 프록시 요청 실행
-		return proxy.DoRedirects(c, fullURL, configs.MaxRetryAttempts)
+		err := proxy.DoRedirects(c, fullURL, configs.MaxRetryAttempts)
+		if err != nil {
+			utils.Warnf("[%s] 서버 요청 실패, 서버 제거: %s (%v)", requestId, server.ServerId, err)
+			serverService.RemoveServer(server.ServerId)
+			return err
+		}
+		return nil
+	}
+
+	// 최적의 서버 선택
+	selectBestServer := func(servers []*types.Server) *types.Server {
+		if len(servers) == 0 {
+			return nil
+		}
+
+		// 점수가 가장 높은 서버 선택
+		bestServer := servers[0]
+		for _, server := range servers[1:] {
+			if server.Metrics.Score > bestServer.Metrics.Score {
+				bestServer = server
+			}
+		}
+		return bestServer
+	}
+
+	// 서버 목록에서 다음 최적 서버 선택
+	selectNextBestServer := func(servers []*types.Server, excludeServerId string) *types.Server {
+		if len(servers) == 0 {
+			return nil
+		}
+
+		var bestServer *types.Server
+		bestScore := float64(-1)
+
+		for _, server := range servers {
+			if server.ServerId != excludeServerId && server.Metrics.Score > bestScore {
+				bestScore = server.Metrics.Score
+				bestServer = server
+			}
+		}
+		return bestServer
 	}
 
 	return func(c *fiber.Ctx) error {
@@ -64,40 +110,64 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 
 		utils.Infof("[%s] 내부 경로 아님, 프록시 처리 시작", requestId)
 
-		// [4] 최적의 서버 선택
-		selectedServer := serverService.SelectOptimalServer()
-		if selectedServer == nil {
-			utils.Errorf("[%s] 선택된 서버가 없음", requestId)
-			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
-				"success": false,
-				"message": "사용 가능한 서버가 없습니다",
-			})
+		// [4] 서버 그룹 가져오기
+		serverGroup := serverService.SelectOptimalServers()
+
+		// [5] 서버리스 강제 사용 체크
+		if serverGroup.ForceServerless {
+			utils.Infof("[%s] 서버리스 강제 사용", requestId)
+			return tryServer(c, serverGroup.ServerlessServer, requestId)
 		}
-		utils.Infof("[%s] 선택된 서버: %s", requestId, selectedServer.ServerId)
 
-		// [5] 선택된 서버로 요청 시도
-		err := tryServer(c, selectedServer, requestId)
+		// [6] 최상위 서버 시도
+		if len(serverGroup.ExcellentServers) > 0 {
+			// 첫 번째 최상위 서버 시도
+			bestServer := selectBestServer(serverGroup.ExcellentServers)
+			err := tryServer(c, bestServer, requestId)
+			if err == nil {
+				return nil
+			}
 
-		// [6] 실패 시 서버리스로 장애 조치
-		if err != nil {
-			utils.Warnf("[%s] 기본 서버 실패, 서버리스로 장애 조치: %v", requestId, err)
-			fallbackServer := serverService.GetServerlessServer()
-			utils.Infof("[%s] 서버리스 서버 가져오기 완료: %+v", requestId, fallbackServer)
-
-			// [7] 서버리스로 재시도
-			err = tryServer(c, fallbackServer, requestId)
-			if err != nil {
-				utils.Errorf("[%s] 서버리스 장애 조치 실패: %v", requestId, err)
-				return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{
-					"success": false,
-					"message": "모든 서버 요청 실패",
-				})
+			// 다른 최상위 서버 시도
+			nextServer := selectNextBestServer(serverGroup.ExcellentServers, bestServer.ServerId)
+			if nextServer != nil {
+				err = tryServer(c, nextServer, requestId)
+				if err == nil {
+					return nil
+				}
 			}
 		}
 
-		// [8] 요청 완료 처리
-		serverService.FinishUsingServer(selectedServer.ServerId)
-		utils.Infof("[%s] 프록시 요청 완료", requestId)
+		// [7] 양호 서버 시도
+		if len(serverGroup.GoodServers) > 0 {
+			// 첫 번째 양호 서버 시도
+			bestServer := selectBestServer(serverGroup.GoodServers)
+			err := tryServer(c, bestServer, requestId)
+			if err == nil {
+				return nil
+			}
+
+			// 다른 양호 서버 시도
+			nextServer := selectNextBestServer(serverGroup.GoodServers, bestServer.ServerId)
+			if nextServer != nil {
+				err = tryServer(c, nextServer, requestId)
+				if err == nil {
+					return nil
+				}
+			}
+		}
+
+		// [8] 모든 서버 실패 시 서버리스로 최종 시도
+		utils.Infof("[%s] 모든 서버 실패, 서버리스로 최종 시도", requestId)
+		err := tryServer(c, serverGroup.ServerlessServer, requestId)
+		if err != nil {
+			utils.Errorf("[%s] 서버리스 최종 시도 실패: %v", requestId, err)
+			return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{
+				"success": false,
+				"message": "모든 서버 요청 실패",
+			})
+		}
+
 		return nil
 	}
 }

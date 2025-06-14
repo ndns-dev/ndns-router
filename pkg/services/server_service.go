@@ -129,58 +129,25 @@ func (s *serverServiceImpl) canUseServer(serverId string) bool {
 	return true
 }
 
-// startUsingServer marks a server as being used
-func (s *serverServiceImpl) startUsingServer(serverId string) {
-	s.mutex.RLock()
-	state, exists := s.serverStates[serverId]
-	s.mutex.RUnlock()
-
-	if !exists {
-		s.mutex.Lock()
-		state = &ServerState{}
-		s.serverStates[serverId] = state
-		s.mutex.Unlock()
-	}
-
-	state.mutex.Lock()
-	state.ActiveRequests++
-	state.LastUsedTime = time.Now()
-	state.mutex.Unlock()
-}
-
-// FinishUsingServer marks a server as no longer being used
-func (s *serverServiceImpl) FinishUsingServer(serverId string) {
-	s.mutex.RLock()
-	state, exists := s.serverStates[serverId]
-	s.mutex.RUnlock()
-
-	if !exists {
-		return
-	}
-
-	state.mutex.Lock()
-	if state.ActiveRequests > 0 {
-		state.ActiveRequests--
-	}
-	state.mutex.Unlock()
-}
-
-func (s *serverServiceImpl) SelectOptimalServer() *types.Server {
+func (s *serverServiceImpl) SelectOptimalServers() *types.ServerGroup {
 	// 서버리스 강제 사용 비율 체크
 	randomValue := utils.NewCalculate().RandomFloat64()
 	utils.Infof("서버리스 강제 사용 비율 체크: %.2f (기준: %.2f)", randomValue, configs.ServerlessForceRatio)
 
-	if randomValue < configs.ServerlessForceRatio {
+	serverGroup := &types.ServerGroup{
+		ServerlessServer: s.GetServerlessServer(),
+		ForceServerless:  randomValue < configs.ServerlessForceRatio,
+	}
+
+	if serverGroup.ForceServerless {
 		utils.Info("서버리스로 강제 전환 (부하 분산)")
-		return s.GetServerlessServer()
+		return serverGroup
 	}
 
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	var excellentServers []*types.Server
-	var goodServers []*types.Server
-
+	// 서버들을 점수에 따라 분류
 	for serverId, server := range s.servers {
 		utils.Infof("서버 검사 중: %s", serverId)
 
@@ -190,31 +157,16 @@ func (s *serverServiceImpl) SelectOptimalServer() *types.Server {
 		}
 
 		if server.Metrics.Score >= configs.ScoreExcellent {
-			excellentServers = append(excellentServers, server)
+			serverGroup.ExcellentServers = append(serverGroup.ExcellentServers, server)
 		} else if server.Metrics.Score >= configs.ScoreGood {
-			goodServers = append(goodServers, server)
+			serverGroup.GoodServers = append(serverGroup.GoodServers, server)
 		}
 	}
 
 	utils.Infof("분류 결과 - 최상위 서버: %d개, 양호 서버: %d개",
-		len(excellentServers), len(goodServers))
+		len(serverGroup.ExcellentServers), len(serverGroup.GoodServers))
 
-	var selectedServer *types.Server
-	if len(excellentServers) > 0 {
-		selectedServer = s.selectRandomServer(excellentServers)
-		utils.Infof("최상위 서버 선택: %s (점수: %.2f)",
-			selectedServer.ServerId, selectedServer.Metrics.Score)
-	} else if len(goodServers) > 0 {
-		selectedServer = s.selectRandomServer(goodServers)
-		utils.Infof("양호 서버 선택: %s (점수: %.2f)",
-			selectedServer.ServerId, selectedServer.Metrics.Score)
-	} else {
-		utils.Info("적합한 서버가 없어 서버리스로 전환")
-		return s.GetServerlessServer()
-	}
-
-	s.startUsingServer(selectedServer.ServerId)
-	return selectedServer
+	return serverGroup
 }
 
 func (s *serverServiceImpl) GetServerlessServer() *types.Server {
@@ -228,13 +180,6 @@ func (s *serverServiceImpl) GetServerlessServer() *types.Server {
 			Score: 100,
 		},
 	}
-}
-
-func (s *serverServiceImpl) selectRandomServer(servers []*types.Server) *types.Server {
-	if len(servers) == 0 {
-		return nil
-	}
-	return servers[utils.NewCalculate().RandomInt(len(servers))]
 }
 
 func (s *serverServiceImpl) UpdateServerMetrics(serverId string, metrics *types.Metrics) error {

@@ -54,3 +54,11 @@ type OptimalServerRequest struct {
 		} `json:"metrics"`
 	} `json:"servers"`
 }
+
+// ServerGroup 서버들을 그룹별로 관리하는 구조체
+type ServerGroup struct {
+	ExcellentServers []*Server // 최상위 서버 목록
+	GoodServers      []*Server // 양호 서버 목록
+	ServerlessServer *Server   // 서버리스 서버
+	ForceServerless  bool      // 서버리스 강제 사용 여부
+}
