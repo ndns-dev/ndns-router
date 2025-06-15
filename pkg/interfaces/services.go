@@ -12,7 +12,7 @@ type ServerService interface {
 	GetAllServers() ([]*types.Server, error)
 	GetHealthyServers() ([]*types.Server, error)
 	GetServer(serverId string) (*types.Server, error)
-	UpdateServerMetrics(serverId string, metrics *types.Metrics) error
+	UpdateServerInfo(serverId string, serverUrl string, metrics *types.Metrics) error
 	SelectOptimalServers() *types.ServerGroup
 	GetServerlessServer() *types.Server
 }

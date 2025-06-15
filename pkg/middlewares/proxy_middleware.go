@@ -23,7 +23,7 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 		utils.Infof("[%s] 서버 시도: %s (점수: %.2f)", requestId, server.ServerId, server.Metrics.Score)
 
 		// [1] URL 정규화
-		targetURL := server.URL
+		targetURL := server.ServerUrl
 		if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
 			targetURL = "https://" + targetURL
 		}

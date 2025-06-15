@@ -77,7 +77,7 @@ func (c *MetricsController) HandleMetricsUpdate(ctx *fiber.Ctx) error {
 		Timestamp:   req.Timestamp,
 	}
 
-	if err := c.serverService.UpdateServerMetrics(req.AppName, metrics); err != nil {
+	if err := c.serverService.UpdateServerInfo(req.AppName, req.ServerURL, metrics); err != nil {
 		utils.Errorf("메트릭 업데이트 실패 (%s): %v", req.AppName, err)
 		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,

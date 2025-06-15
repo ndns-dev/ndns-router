@@ -24,7 +24,7 @@ type OptimalServer struct {
 // Server는 서버 정보를 나타내는 구조체입니다
 type Server struct {
 	ServerId      string    `json:"serverId"`
-	URL           string    `json:"url"`
+	ServerUrl     string    `json:"serverUrl"`
 	CurrentStatus string    `json:"status"`
 	LastUpdated   time.Time `json:"lastUpdated"`
 	Metrics       *Metrics  `json:"metrics,omitempty"`
@@ -44,8 +44,9 @@ type Metrics struct {
 // OptimalServerRequest는 최적 서버 등록 요청 구조체입니다
 type OptimalServerRequest struct {
 	Servers []struct {
-		ServerId string `json:"serverId"`
-		Metrics  struct {
+		ServerId  string `json:"serverId"`
+		ServerUrl string `json:"serverUrl"`
+		Metrics   struct {
 			CpuUsage     float64 `json:"cpuUsage"`
 			MemoryUsage  float64 `json:"memoryUsage"`
 			ErrorRate    float64 `json:"errorRate"`

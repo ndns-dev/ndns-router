@@ -40,19 +40,19 @@ func NewServerService() (interfaces.ServerService, error) {
 }
 
 // AddServer 새 서버 추가
-func (s *serverServiceImpl) AddServer(serverId, url string) error {
+func (s *serverServiceImpl) AddServer(serverId, serverUrl string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
 	server := &types.Server{
 		ServerId:      serverId,
-		URL:           url,
+		ServerUrl:     serverUrl,
 		CurrentStatus: string(types.StatusUnknown),
 		LastUpdated:   time.Now(),
 	}
 
 	s.servers[serverId] = server
-	utils.Infof("서버 추가됨: %s (%s)", serverId, url)
+	utils.Infof("서버 추가됨: %s (%s)", serverId, serverUrl)
 	return nil
 }
 
@@ -174,8 +174,8 @@ func (s *serverServiceImpl) GetServerlessServer() *types.Server {
 	selectedServer := configs.GetConfig().Serverless.Servers[serverIndex]
 
 	return &types.Server{
-		ServerId: selectedServer,
-		URL:      selectedServer,
+		ServerId:  selectedServer,
+		ServerUrl: selectedServer,
 		Metrics: &types.Metrics{
 			Score: 100,
 		},
@@ -203,5 +203,33 @@ func (s *serverServiceImpl) UpdateServerMetrics(serverId string, metrics *types.
 		utils.Infof("새로운 최적 서버가 선택되었습니다: %s (점수: %.2f)", serverId, metrics.Score)
 	}
 
+	return nil
+}
+
+// UpdateServerInfo 서버의 URL과 메트릭스를 함께 업데이트합니다
+func (s *serverServiceImpl) UpdateServerInfo(serverId string, serverUrl string, metrics *types.Metrics) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	server, exists := s.servers[serverId]
+	if !exists {
+		return fmt.Errorf("서버가 존재하지 않습니다: %s", serverId)
+	}
+
+	// URL과 메트릭스 업데이트
+	server.ServerUrl = serverUrl
+	server.Metrics = metrics
+	server.LastUpdated = time.Now()
+
+	// 최적 서버 업데이트 (받은 점수 기준)
+	if s.optimalServer == nil || metrics.Score > s.optimalServer.Score {
+		s.optimalServer = &types.OptimalServer{
+			ServerId: serverId,
+			Score:    metrics.Score,
+		}
+		utils.Infof("새로운 최적 서버가 선택되었습니다: %s (점수: %.2f)", serverId, metrics.Score)
+	}
+
+	utils.Infof("서버 정보 업데이트됨 - ServerId: %s, URL: %s, Score: %.2f", serverId, serverUrl, metrics.Score)
 	return nil
 }

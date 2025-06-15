@@ -37,7 +37,7 @@ func (c *ServerController) HandleServersStatus(ctx *fiber.Ctx) error {
 	for _, server := range servers {
 		serverInfo := fiber.Map{
 			"serverId":    server.ServerId,
-			"url":         server.URL,
+			"serverUrl":   server.ServerUrl,
 			"status":      server.CurrentStatus,
 			"lastUpdated": server.LastUpdated.Format(time.RFC3339),
 		}
