@@ -36,5 +36,5 @@ const (
 	CooldownPeriod        = 100 * time.Millisecond // 서버 재사용 대기 시간
 
 	// 서버리스 설정
-	ServerlessForceRatio = 0.2 // 강제로 서버리스로 보낼 비율 (20%)
+	ServerlessForceRatio = 0.5 // 강제로 서버리스로 보낼 비율 (50%)
 )
