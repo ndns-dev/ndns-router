@@ -1,6 +1,8 @@
 package middlewares
 
 import (
+	"crypto/tls"
+	"fmt"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -9,6 +11,7 @@ import (
 	"github.com/sh5080/ndns-router/pkg/interfaces"
 	"github.com/sh5080/ndns-router/pkg/types"
 	"github.com/sh5080/ndns-router/pkg/utils"
+	"github.com/valyala/fasthttp"
 )
 
 func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
@@ -41,13 +44,22 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 		c.Request().Header.Set("X-App-Name", server.ServerId)
 		c.Request().Header.Set("X-Request-ID", requestId)
 
-		// [4] 프록시 요청 실행
-		err := proxy.DoRedirects(c, fullURL, configs.MaxRetryAttempts)
+		// [4] TLS 검증 건너뛰기 설정 및 프록시 요청 실행
+		err := proxy.Do(c, fullURL, &fasthttp.Client{
+			TLSConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		})
 		if err != nil {
 			utils.Warnf("[%s] 서버 요청 실패, 서버 제거: %s (%v)", requestId, server.ServerId, err)
 			serverService.RemoveServer(server.ServerId)
 			return err
 		}
+
+		// [6] 응답 헤더에 서버 정보 추가
+		c.Response().Header.Set("X-Served-By", server.ServerId)
+		c.Response().Header.Set("X-Server-Score", fmt.Sprintf("%.2f", server.Metrics.Score))
+
 		return nil
 	}
 
@@ -111,7 +123,7 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 		utils.Infof("[%s] 내부 경로 아님, 프록시 처리 시작", requestId)
 
 		// [4] 서버 그룹 가져오기
-		serverGroup := serverService.SelectOptimalServers()
+		serverGroup := serverService.GetServerGroup()
 
 		// [5] 서버리스 강제 사용 체크
 		if serverGroup.ForceServerless {
