@@ -38,6 +38,10 @@ func NewServerService() (interfaces.ServerService, error) {
 		stopCollection:   make(chan struct{}),
 		optimalServer:    nil,
 		serverlessServer: nil,
+		serverGroup: &types.ServerGroup{
+			ExcellentServers: make([]*types.Server, 0),
+			GoodServers:      make([]*types.Server, 0),
+		},
 	}, nil
 }
 
@@ -164,6 +168,27 @@ func (s *serverServiceImpl) classifyServers() {
 }
 
 func (s *serverServiceImpl) GetServerGroup() *types.ServerGroup {
+	s.serverGroupMutex.Lock()
+	defer s.serverGroupMutex.Unlock()
+
+	if s.serverGroup == nil {
+		s.serverGroup = &types.ServerGroup{
+			ExcellentServers: make([]*types.Server, 0),
+			GoodServers:      make([]*types.Server, 0),
+		}
+	}
+
+	// 0.0 ~ 1.0 사이의 랜덤 값 생성
+	random := utils.NewCalculate().RandomFloat64()
+
+	// 서버리스 강제 설정
+	s.serverGroup.ForceServerless = random < configs.ServerlessForceRatio
+
+	if s.serverGroup.ForceServerless {
+		utils.Infof("서버리스 강제 사용 비율 체크: %.2f (기준: %.2f) -> 서버리스 강제",
+			random, configs.ServerlessForceRatio)
+	}
+
 	return s.serverGroup
 }
 
