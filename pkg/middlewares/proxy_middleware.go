@@ -20,7 +20,8 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 	// 서버 요청 시도
 	tryServer := func(c *fiber.Ctx, server *types.Server, requestId string) error {
 		if server == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "서버가 없음")
+			utils.Infof("[%s] 서버가 없어 서버리스로 전환", requestId)
+			server = serverService.GetServerlessServer()
 		}
 
 		utils.Infof("[%s] 서버 시도: %s (점수: %.2f)", requestId, server.ServerId, server.Metrics.Score)
