@@ -7,13 +7,12 @@ import (
 // ServerService 서버 관리를 위한 서비스 인터페이스
 type ServerService interface {
 	// 서버 관리
-	AddServer(serverId, url string) error
+	AddServer(server *types.Server) error
 	RemoveServer(serverId string) error
 	GetAllServers() ([]*types.Server, error)
 	GetHealthyServers() ([]*types.Server, error)
 	GetServer(serverId string) (*types.Server, error)
-	UpdateServerInfo(serverId string, serverUrl string, metrics *types.Metrics) error
-	SelectOptimalServers() *types.ServerGroup
+	GetServerGroup() *types.ServerGroup
 	GetServerlessServer() *types.Server
 }
 

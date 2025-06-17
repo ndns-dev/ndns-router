@@ -9,7 +9,8 @@ type ServerStatus string
 
 const (
 	// 서버 상태 정의
-	StatusHealthy   ServerStatus = "healthy"   // 정상 상태
+	StatusExcellent ServerStatus = "excellent" // 최상위 상태
+	StatusGood      ServerStatus = "good"      // 양호 상태
 	StatusWarning   ServerStatus = "warning"   // 경고 상태
 	StatusUnhealthy ServerStatus = "unhealthy" // 비정상 상태
 	StatusUnknown   ServerStatus = "unknown"   // 알 수 없음
@@ -25,6 +26,7 @@ type OptimalServer struct {
 type Server struct {
 	ServerId      string    `json:"serverId"`
 	ServerUrl     string    `json:"serverUrl"`
+	ServerType    string    `json:"serverType"`
 	CurrentStatus string    `json:"status"`
 	LastUpdated   time.Time `json:"lastUpdated"`
 	Metrics       *Metrics  `json:"metrics,omitempty"`
@@ -44,9 +46,10 @@ type Metrics struct {
 // OptimalServerRequest는 최적 서버 등록 요청 구조체입니다
 type OptimalServerRequest struct {
 	Servers []struct {
-		ServerId  string `json:"serverId"`
-		ServerUrl string `json:"serverUrl"`
-		Metrics   struct {
+		ServerId   string `json:"serverId"`
+		ServerUrl  string `json:"serverUrl"`
+		ServerType string `json:"serverType"`
+		Metrics    struct {
 			CpuUsage     float64 `json:"cpuUsage"`
 			MemoryUsage  float64 `json:"memoryUsage"`
 			ErrorRate    float64 `json:"errorRate"`

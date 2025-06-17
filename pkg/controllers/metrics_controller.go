@@ -25,6 +25,7 @@ func NewMetricsController(serverService interfaces.ServerService) *MetricsContro
 type MetricsUpdateRequest struct {
 	AppName       string    `json:"app_name"`
 	ServerURL     string    `json:"server_url"`
+	ServerType    string    `json:"server_type"`
 	CPUUsage      float64   `json:"cpu_usage"`
 	MemoryUsage   float64   `json:"memory_usage"`
 	ErrorRate     float64   `json:"error_rate"`
@@ -58,7 +59,13 @@ func (c *MetricsController) HandleMetricsUpdate(ctx *fiber.Ctx) error {
 	// 서버가 없으면 자동으로 등록
 	server, err := c.serverService.GetServer(req.AppName)
 	if err != nil || server == nil {
-		if err := c.serverService.AddServer(req.AppName, req.ServerURL); err != nil {
+		if err := c.serverService.AddServer(&types.Server{
+			ServerId:      req.AppName,
+			ServerUrl:     req.ServerURL,
+			ServerType:    req.ServerType,
+			CurrentStatus: string(types.StatusUnknown),
+			LastUpdated:   time.Now(),
+		}); err != nil {
 			utils.Errorf("서버 자동 등록 실패 (%s): %v", req.AppName, err)
 			return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"success": false,
@@ -68,16 +75,15 @@ func (c *MetricsController) HandleMetricsUpdate(ctx *fiber.Ctx) error {
 		utils.Infof("새 서버가 자동 등록됨: %s (%s)", req.AppName, req.ServerURL)
 	}
 
-	// 메트릭 데이터 업데이트
-	metrics := &types.Metrics{
-		CPUUsage:    req.CPUUsage,
-		MemoryUsage: req.MemoryUsage,
-		ErrorRate:   req.ErrorRate,
-		Latency:     req.ResponseTime,
-		Timestamp:   req.Timestamp,
+	server = &types.Server{
+		ServerId:      req.AppName,
+		ServerUrl:     req.ServerURL,
+		ServerType:    req.ServerType,
+		CurrentStatus: string(types.StatusUnknown),
+		LastUpdated:   time.Now(),
 	}
 
-	if err := c.serverService.UpdateServerInfo(req.AppName, req.ServerURL, metrics); err != nil {
+	if err := c.serverService.AddServer(server); err != nil {
 		utils.Errorf("메트릭 업데이트 실패 (%s): %v", req.AppName, err)
 		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,

@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/sh5080/ndns-router/pkg/interfaces"
+	"github.com/sh5080/ndns-router/pkg/types"
 	"github.com/sh5080/ndns-router/pkg/utils"
 )
 
@@ -38,6 +39,7 @@ func (c *ServerController) HandleServersStatus(ctx *fiber.Ctx) error {
 		serverInfo := fiber.Map{
 			"serverId":    server.ServerId,
 			"serverUrl":   server.ServerUrl,
+			"serverType":  server.ServerType,
 			"status":      server.CurrentStatus,
 			"lastUpdated": server.LastUpdated.Format(time.RFC3339),
 		}
@@ -59,8 +61,9 @@ func (c *ServerController) HandleServersStatus(ctx *fiber.Ctx) error {
 // HandleAddServer는 새로운 서버를 등록합니다
 func (c *ServerController) HandleAddServer(ctx *fiber.Ctx) error {
 	var req struct {
-		ServerId string `json:"serverId"`
-		URL      string `json:"url"`
+		ServerId   string `json:"serverId"`
+		URL        string `json:"url"`
+		ServerType string `json:"serverType"`
 	}
 
 	if err := ctx.BodyParser(&req); err != nil {
@@ -77,7 +80,13 @@ func (c *ServerController) HandleAddServer(ctx *fiber.Ctx) error {
 		})
 	}
 
-	if err := c.serverService.AddServer(req.ServerId, req.URL); err != nil {
+	if err := c.serverService.AddServer(&types.Server{
+		ServerId:      req.ServerId,
+		ServerUrl:     req.URL,
+		ServerType:    req.ServerType,
+		CurrentStatus: string(types.StatusUnknown),
+		LastUpdated:   time.Now(),
+	}); err != nil {
 		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,
 			"message": "서버 등록 실패: " + err.Error(),

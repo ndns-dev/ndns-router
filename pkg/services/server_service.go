@@ -1,7 +1,7 @@
 package services
 
 import (
-	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +26,8 @@ type serverServiceImpl struct {
 	stopCollection   chan struct{}
 	optimalServer    *types.OptimalServer // 최적 서버 정보 저장
 	serverlessServer *types.Server
+	serverGroup      *types.ServerGroup // 추가
+	serverGroupMutex sync.RWMutex       // 서버 그룹용 별도 뮤텍스
 }
 
 // NewServerService creates a new instance of ServerService
@@ -40,19 +42,15 @@ func NewServerService() (interfaces.ServerService, error) {
 }
 
 // AddServer 새 서버 추가
-func (s *serverServiceImpl) AddServer(serverId, serverUrl string) error {
+func (s *serverServiceImpl) AddServer(server *types.Server) error {
 	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	s.servers[server.ServerId] = server
+	s.mutex.Unlock()
 
-	server := &types.Server{
-		ServerId:      serverId,
-		ServerUrl:     serverUrl,
-		CurrentStatus: string(types.StatusUnknown),
-		LastUpdated:   time.Now(),
-	}
+	utils.Infof("서버 추가됨: %s (%s)", server.ServerId, server.ServerUrl)
 
-	s.servers[serverId] = server
-	utils.Infof("서버 추가됨: %s (%s)", serverId, serverUrl)
+	// 서버 추가 후 바로 분류 실행
+	s.classifyServers()
 	return nil
 }
 
@@ -87,7 +85,7 @@ func (s *serverServiceImpl) GetHealthyServers() ([]*types.Server, error) {
 
 	servers := make([]*types.Server, 0)
 	for _, server := range s.servers {
-		if server.CurrentStatus == string(types.StatusHealthy) {
+		if server.CurrentStatus == string(types.StatusGood) || server.CurrentStatus == string(types.StatusExcellent) {
 			servers = append(servers, server)
 		}
 	}
@@ -129,107 +127,59 @@ func (s *serverServiceImpl) canUseServer(serverId string) bool {
 	return true
 }
 
-func (s *serverServiceImpl) SelectOptimalServers() *types.ServerGroup {
-	// 서버리스 강제 사용 비율 체크
-	randomValue := utils.NewCalculate().RandomFloat64()
-	utils.Infof("서버리스 강제 사용 비율 체크: %.2f (기준: %.2f)", randomValue, configs.ServerlessForceRatio)
+// 서버 분류 함수 분리
+func (s *serverServiceImpl) classifyServers() {
+	s.serverGroupMutex.Lock()
+	defer s.serverGroupMutex.Unlock()
 
-	serverGroup := &types.ServerGroup{
-		ServerlessServer: s.GetServerlessServer(),
-		ForceServerless:  randomValue < configs.ServerlessForceRatio,
+	newGroup := &types.ServerGroup{
+		ExcellentServers: make([]*types.Server, 0),
+		GoodServers:      make([]*types.Server, 0),
 	}
 
-	if serverGroup.ForceServerless {
-		utils.Info("서버리스로 강제 전환 (부하 분산)")
-		return serverGroup
-	}
-
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	// 서버들을 점수에 따라 분류
+	s.mutex.RLock()
 	for serverId, server := range s.servers {
-		utils.Infof("서버 검사 중: %s", serverId)
-
 		if !s.canUseServer(server.ServerId) {
 			utils.Infof("사용 불가능한 서버: %s", serverId)
 			continue
 		}
 
+		if server.ServerType == "wsl" {
+			server.CurrentStatus = string(types.StatusGood)
+			newGroup.GoodServers = append(newGroup.GoodServers, server)
+			continue
+		}
+
 		if server.Metrics.Score >= configs.ScoreExcellent {
-			serverGroup.ExcellentServers = append(serverGroup.ExcellentServers, server)
+			newGroup.ExcellentServers = append(newGroup.ExcellentServers, server)
 		} else if server.Metrics.Score >= configs.ScoreGood {
-			serverGroup.GoodServers = append(serverGroup.GoodServers, server)
+			newGroup.GoodServers = append(newGroup.GoodServers, server)
 		}
 	}
+	s.mutex.RUnlock()
 
-	utils.Infof("분류 결과 - 최상위 서버: %d개, 양호 서버: %d개",
-		len(serverGroup.ExcellentServers), len(serverGroup.GoodServers))
+	s.serverGroup = newGroup
+	utils.Infof("서버 분류 완료 - 최상위 서버: %d개, 양호 서버: %d개",
+		len(newGroup.ExcellentServers), len(newGroup.GoodServers))
+}
 
-	return serverGroup
+func (s *serverServiceImpl) GetServerGroup() *types.ServerGroup {
+	return s.serverGroup
 }
 
 func (s *serverServiceImpl) GetServerlessServer() *types.Server {
 	serverIndex := utils.NewGenerate().NextRoundRobinIndex(len(configs.GetConfig().Serverless.Servers))
 	selectedServer := configs.GetConfig().Serverless.Servers[serverIndex]
 
+	// URL에서 서브도메인만 추출
+	serverDomain := strings.Split(strings.Replace(selectedServer, "https://", "", 1), ".")[0] // api3.ndns.site -> api3
+	serverId := "ndns-" + serverDomain                                                        // ndns-api3
+
 	return &types.Server{
-		ServerId:  selectedServer,
+		ServerId:  serverId,
 		ServerUrl: selectedServer,
 		Metrics: &types.Metrics{
 			Score: 100,
 		},
 	}
-}
-
-func (s *serverServiceImpl) UpdateServerMetrics(serverId string, metrics *types.Metrics) error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	server, exists := s.servers[serverId]
-	if !exists {
-		return fmt.Errorf("서버가 존재하지 않습니다: %s", serverId)
-	}
-
-	server.Metrics = metrics
-	server.LastUpdated = time.Now()
-
-	// 최적 서버 업데이트 (받은 점수 기준)
-	if s.optimalServer == nil || metrics.Score > s.optimalServer.Score {
-		s.optimalServer = &types.OptimalServer{
-			ServerId: serverId,
-			Score:    metrics.Score,
-		}
-		utils.Infof("새로운 최적 서버가 선택되었습니다: %s (점수: %.2f)", serverId, metrics.Score)
-	}
-
-	return nil
-}
-
-// UpdateServerInfo 서버의 URL과 메트릭스를 함께 업데이트합니다
-func (s *serverServiceImpl) UpdateServerInfo(serverId string, serverUrl string, metrics *types.Metrics) error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	server, exists := s.servers[serverId]
-	if !exists {
-		return fmt.Errorf("서버가 존재하지 않습니다: %s", serverId)
-	}
-
-	// URL과 메트릭스 업데이트
-	server.ServerUrl = serverUrl
-	server.Metrics = metrics
-	server.LastUpdated = time.Now()
-
-	// 최적 서버 업데이트 (받은 점수 기준)
-	if s.optimalServer == nil || metrics.Score > s.optimalServer.Score {
-		s.optimalServer = &types.OptimalServer{
-			ServerId: serverId,
-			Score:    metrics.Score,
-		}
-		utils.Infof("새로운 최적 서버가 선택되었습니다: %s (점수: %.2f)", serverId, metrics.Score)
-	}
-
-	utils.Infof("서버 정보 업데이트됨 - ServerId: %s, URL: %s, Score: %.2f", serverId, serverUrl, metrics.Score)
-	return nil
 }
