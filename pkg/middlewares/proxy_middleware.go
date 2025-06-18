@@ -14,14 +14,92 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
+// selectProxyServer는 요청 Limit 값과 서버 상태에 따라 프록시할 최적의 서버를 선택합니다.
+// 적합한 서버를 찾으면 해당 서버 객체를 반환하고, 그렇지 않으면 nil을 반환합니다.
+func selectProxyServer(c *fiber.Ctx, serverService interfaces.ServerService, requestId string) *types.Server {
+	serverGroup := serverService.GetServerGroup()
+	limit := c.QueryInt("limit", 0)
+
+	// limit=2일 때는 서버리스 강제사용 건너뛰기
+	if limit != 2 && serverGroup.ForceServerless {
+		utils.Infof("[%s] 서버리스 강제 사용", requestId)
+		return serverGroup.ServerlessServer
+	}
+
+	// limit 값에 따른 우선순위 정의
+	var performanceOrder []string
+	// limit ~2일 때는 서버리스 사용하지 않음
+	if limit <= 2 {
+		performanceOrder = []string{
+			"ndns-api1",     // EC2
+			"ndns-api2",     // Windows Desktop
+			"ndns-external", // Mac M1
+		}
+		utils.Infof("[%s] Limit=2 우선순위 적용", requestId)
+	} else if limit <= 10 {
+		performanceOrder = []string{
+			"ndns-external", // Mac M1
+			"ndns-api1",     // EC2
+			"ndns-api2",     // Windows Desktop
+			"ndns-api3",     // Cloud Run
+		}
+		utils.Infof("[%s] Limit=10 우선순위 적용", requestId)
+	} else {
+		// 기본 우선순위
+		performanceOrder = []string{
+			"ndns-external", // Mac M1
+			"ndns-api1",     // EC2
+			"ndns-api3",     // Cloud Run
+			"ndns-api2",     // Windows Desktop
+		}
+		utils.Infof("[%s] 기본 우선순위 적용", requestId)
+	}
+
+	// Excellent 서버가 있으면 Excellent 서버들 중에서만 선택
+	if len(serverGroup.ExcellentServers) > 0 {
+		for _, preferredId := range performanceOrder {
+			for _, server := range serverGroup.ExcellentServers {
+				if server.ServerId == preferredId {
+					utils.Infof("[%s] Excellent 서버 중 성능 우선순위 선택: %s (점수: %.2f, limit: %d)",
+						requestId, server.ServerId, server.Metrics.Score, limit)
+					return server
+				}
+			}
+		}
+		return serverGroup.ExcellentServers[0]
+	}
+
+	// Good 서버들 중에서 선택
+	if len(serverGroup.GoodServers) > 0 {
+		for _, preferredId := range performanceOrder {
+			for _, server := range serverGroup.GoodServers {
+				if server.ServerId == preferredId {
+					utils.Infof("[%s] Good 서버 중 성능 우선순위 선택: %s (점수: %.2f, limit: %d)",
+						requestId, server.ServerId, server.Metrics.Score, limit)
+					return server
+				}
+			}
+		}
+		return serverGroup.GoodServers[0]
+	}
+
+	return nil
+}
+
 func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 	pathUtil := utils.NewPath(configs.InternalPaths)
 
-	// 서버 요청 시도
+	// 서버 요청 시도 (tryServer 함수는 그대로 유지)
 	tryServer := func(c *fiber.Ctx, server *types.Server, requestId string) error {
 		if server == nil {
 			utils.Infof("[%s] 서버가 없어 서버리스로 전환", requestId)
-			server = serverService.GetServerlessServer()
+			server = serverService.GetServerlessServer() // 폴백 서버 (서버리스)
+		}
+
+		// nil이 여전히 발생할 수 있는 시나리오 방지
+		if server == nil {
+			utils.Errorf("[%s] 프록시할 서버(서버리스 포함)를 찾을 수 없습니다.", requestId)
+			return fmt.Errorf("no proxy server available")
 		}
 
 		utils.Infof("[%s] 서버 시도: %s (점수: %.2f)", requestId, server.ServerId, server.Metrics.Score)
@@ -64,40 +142,6 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 		return nil
 	}
 
-	// 최적의 서버 선택
-	selectBestServer := func(servers []*types.Server) *types.Server {
-		if len(servers) == 0 {
-			return nil
-		}
-
-		// 점수가 가장 높은 서버 선택
-		bestServer := servers[0]
-		for _, server := range servers[1:] {
-			if server.Metrics.Score > bestServer.Metrics.Score {
-				bestServer = server
-			}
-		}
-		return bestServer
-	}
-
-	// 서버 목록에서 다음 최적 서버 선택
-	selectNextBestServer := func(servers []*types.Server, excludeServerId string) *types.Server {
-		if len(servers) == 0 {
-			return nil
-		}
-
-		var bestServer *types.Server
-		bestScore := float64(-1)
-
-		for _, server := range servers {
-			if server.ServerId != excludeServerId && server.Metrics.Score > bestScore {
-				bestScore = server.Metrics.Score
-				bestServer = server
-			}
-		}
-		return bestServer
-	}
-
 	return func(c *fiber.Ctx) error {
 		// [1] 요청 시작 및 초기화
 		requestId := utils.NewGenerate().GenerateRequestId()
@@ -123,62 +167,12 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 
 		utils.Infof("[%s] 내부 경로 아님, 프록시 처리 시작", requestId)
 
-		// [4] 서버 그룹 가져오기
-		serverGroup := serverService.GetServerGroup()
-
-		// [5] 서버리스 강제 사용 체크
-		if serverGroup.ForceServerless {
-			utils.Infof("[%s] 서버리스 강제 사용", requestId)
-			return tryServer(c, serverGroup.ServerlessServer, requestId)
-		}
-
-		// [6] 최상위 서버 시도
-		if len(serverGroup.ExcellentServers) > 0 {
-			// 첫 번째 최상위 서버 시도
-			bestServer := selectBestServer(serverGroup.ExcellentServers)
-			err := tryServer(c, bestServer, requestId)
-			if err == nil {
-				return nil
-			}
-
-			// 다른 최상위 서버 시도
-			nextServer := selectNextBestServer(serverGroup.ExcellentServers, bestServer.ServerId)
-			if nextServer != nil {
-				err = tryServer(c, nextServer, requestId)
-				if err == nil {
-					return nil
-				}
-			}
-		}
-
-		// [7] 양호 서버 시도
-		if len(serverGroup.GoodServers) > 0 {
-			// 첫 번째 양호 서버 시도
-			bestServer := selectBestServer(serverGroup.GoodServers)
-			err := tryServer(c, bestServer, requestId)
-			if err == nil {
-				return nil
-			}
-
-			// 다른 양호 서버 시도
-			nextServer := selectNextBestServer(serverGroup.GoodServers, bestServer.ServerId)
-			if nextServer != nil {
-				err = tryServer(c, nextServer, requestId)
-				if err == nil {
-					return nil
-				}
-			}
-		}
-
-		// [8] 모든 서버 실패 시 서버리스로 최종 시도
-		utils.Infof("[%s] 모든 서버 실패, 서버리스로 최종 시도", requestId)
-		err := tryServer(c, serverGroup.ServerlessServer, requestId)
+		// 단일 서버 선택 및 요청 시도
+		selectedServer := selectProxyServer(c, serverService, requestId)
+		err := tryServer(c, selectedServer, requestId)
 		if err != nil {
-			utils.Errorf("[%s] 서버리스 최종 시도 실패: %v", requestId, err)
-			return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{
-				"success": false,
-				"message": "모든 서버 요청 실패",
-			})
+			utils.Infof("[%s] 서버리스로 전환", requestId)
+			return tryServer(c, nil, requestId)
 		}
 
 		return nil
