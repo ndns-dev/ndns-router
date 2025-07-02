@@ -2,11 +2,12 @@ package configs
 
 import "time"
 
-// 내부 관리 경로
+// 접근 가능한 내부 관리 경로
 var InternalPaths = map[string]bool{
 	"/servers":  true,
 	"/metrics":  true,
 	"/internal": true,
+	"/external": true,
 }
 
 // 타임아웃 설정
