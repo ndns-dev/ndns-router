@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -47,14 +48,28 @@ func NewServerService() (interfaces.ServerService, error) {
 
 // AddServer 새 서버 추가
 func (s *serverServiceImpl) AddServer(server *types.Server) error {
-	s.mutex.Lock()
-	s.servers[server.ServerId] = server
-	s.mutex.Unlock()
+	if server == nil {
+		return errors.New("server cannot be nil")
+	}
 
+	// 서버 메트릭스 초기화
+	if server.Metrics == nil {
+		server.Metrics = &types.Metrics{
+			Score: 0,
+		}
+	}
+
+	// 서버 추가
+	s.servers[server.ServerId] = server
 	utils.Infof("서버 추가됨: %s (%s)", server.ServerId, server.ServerUrl)
 
-	// 서버 추가 후 바로 분류 실행
-	s.classifyServers()
+	// 서버 분류
+	if server.Metrics.Score >= configs.ScoreExcellent {
+		s.serverGroup.ExcellentServers = append(s.serverGroup.ExcellentServers, server)
+	} else if server.Metrics.Score >= configs.ScoreGood {
+		s.serverGroup.GoodServers = append(s.serverGroup.GoodServers, server)
+	}
+
 	return nil
 }
 
