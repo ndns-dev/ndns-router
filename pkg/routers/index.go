@@ -4,12 +4,11 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/sh5080/ndns-router/pkg/middlewares"
 	"github.com/sh5080/ndns-router/pkg/services"
-	"github.com/sh5080/ndns-router/pkg/types"
 	"github.com/sh5080/ndns-router/pkg/utils"
 )
 
 // SetupRoutes는 애플리케이션의 모든 라우트를 설정합니다
-func SetupRoutes(app *fiber.App, config *types.RouterConfig) error {
+func SetupRoutes(app *fiber.App) error {
 	// 서비스 초기화
 	serverService, err := services.NewServerService()
 	if err != nil {
@@ -32,6 +31,12 @@ func SetupRoutes(app *fiber.App, config *types.RouterConfig) error {
 
 	internal := app.Group("/internal")
 	if err := SetupInternalRoutes(internal, serverService); err != nil {
+		return err
+	}
+
+	external := app.Group("/external")
+	external.Use(middlewares.JwtMiddleware())
+	if err := SetupExternalRoutes(external, serverService); err != nil {
 		return err
 	}
 

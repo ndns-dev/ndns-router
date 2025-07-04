@@ -7,6 +7,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/proxy"
+	"github.com/google/uuid"
 	"github.com/sh5080/ndns-router/pkg/configs"
 	"github.com/sh5080/ndns-router/pkg/interfaces"
 	"github.com/sh5080/ndns-router/pkg/types"
@@ -90,7 +91,7 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 	pathUtil := utils.NewPath(configs.InternalPaths)
 
 	// 서버 요청 시도 (tryServer 함수는 그대로 유지)
-	tryServer := func(c *fiber.Ctx, server *types.Server, requestId string) error {
+	tryServer := func(ctx *fiber.Ctx, server *types.Server, requestId string) error {
 		if server == nil {
 			utils.Infof("[%s] 서버가 없어 서버리스로 전환", requestId)
 			server = serverService.GetServerlessServer() // 폴백 서버 (서버리스)
@@ -104,6 +105,9 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 
 		utils.Infof("[%s] 서버 시도: %s (점수: %.2f)", requestId, server.ServerId, server.Metrics.Score)
 
+		// test url
+		server.ServerUrl = "https://gratefully-genuine-katydid.ngrok-free.app"
+		utils.Infof("강제 테스트 url: %s", server.ServerUrl)
 		// [1] URL 정규화
 		targetURL := server.ServerUrl
 		if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
@@ -112,19 +116,19 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 		targetURL = strings.TrimSuffix(targetURL, "/")
 
 		// [2] 전체 URL 구성
-		fullURL := targetURL + c.Path()
-		if c.Request().URI().QueryString() != nil {
-			fullURL += "?" + string(c.Request().URI().QueryString())
+		fullURL := targetURL + ctx.Path()
+		if ctx.Request().URI().QueryString() != nil {
+			fullURL += "?" + string(ctx.Request().URI().QueryString())
 		}
 
 		// [3] 요청 헤더 설정
-		c.Request().Header.Set("X-Forwarded-Host", string(c.Request().Header.Host()))
-		c.Request().Header.Set("X-Origin-Host", server.ServerId)
-		c.Request().Header.Set("X-App-Name", server.ServerId)
-		c.Request().Header.Set("X-Request-ID", requestId)
+		ctx.Request().Header.Set("X-Forwarded-Host", string(ctx.Request().Header.Host()))
+		ctx.Request().Header.Set("X-Origin-Host", server.ServerId)
+		ctx.Request().Header.Set("X-App-Name", server.ServerId)
+		ctx.Request().Header.Set("X-Request-ID", requestId)
 
 		// [4] TLS 검증 건너뛰기 설정 및 프록시 요청 실행
-		err := proxy.Do(c, fullURL, &fasthttp.Client{
+		err := proxy.Do(ctx, fullURL, &fasthttp.Client{
 			TLSConfig: &tls.Config{
 				InsecureSkipVerify: true,
 			},
@@ -136,15 +140,23 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 		}
 
 		// [6] 응답 헤더에 서버 정보 추가
-		c.Response().Header.Set("X-Served-By", server.ServerId)
-		c.Response().Header.Set("X-Server-Score", fmt.Sprintf("%.2f", server.Metrics.Score))
-
+		ctx.Response().Header.Set("X-Served-By", server.ServerId)
+		ctx.Response().Header.Set("X-Server-Score", fmt.Sprintf("%.2f", server.Metrics.Score))
+		// [7] jwt 허용 경로일 경우 토큰 생성
+		fmt.Println("ctx.Path(): ", ctx.Path())
+		if types.IsJwtEligible(ctx.Path()) {
+			if token, err := utils.GenerateSseToken(requestId, 10); err == nil {
+				ctx.Response().Header.Set("X-Sse-Token", token)
+				ctx.Response().Header.Set("X-Sse-Id", uuid.New().String())
+				ctx.Response().Header.Set("Access-Control-Expose-Headers", "X-Req-Id, X-Sse-Token, X-Sse-Id")
+			}
+		}
 		return nil
 	}
 
 	return func(c *fiber.Ctx) error {
 		// [1] 요청 시작 및 초기화
-		requestId := utils.NewGenerate().GenerateRequestId()
+		requestId := uuid.New().String()
 		path := c.Path()
 
 		utils.Infof("[%s] 새로운 프록시 요청 시작: %s %s", requestId, c.Method(), path)
@@ -159,10 +171,7 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 		if !strings.HasPrefix(path, "/api") {
 			utils.Warnf("[%s] 비정상 요청 차단: %s %s from %s",
 				requestId, c.Method(), path, c.IP())
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
-				"success": false,
-				"message": "Forbidden",
-			})
+			return utils.SendError(c, fiber.StatusForbidden, "Forbidden")
 		}
 
 		utils.Infof("[%s] 내부 경로 아님, 프록시 처리 시작", requestId)

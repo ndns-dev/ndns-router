@@ -66,3 +66,17 @@ type ServerGroup struct {
 	ServerlessServer *Server   // 서버리스 서버
 	ForceServerless  bool      // 서버리스 강제 사용 여부
 }
+
+type JwtEligiblePaths string
+
+const (
+	Search JwtEligiblePaths = "/api/v1/search"
+)
+
+var JwtEligiblePathsMap = map[JwtEligiblePaths]bool{
+	Search: true,
+}
+
+func IsJwtEligible(path string) bool {
+	return JwtEligiblePathsMap[JwtEligiblePaths(path)]
+}
