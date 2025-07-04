@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -64,5 +65,16 @@ func (c *InternalController) HandleOptimalServer(ctx *fiber.Ctx) error {
 		}
 	}
 
+	return ctx.SendStatus(fiber.StatusOK)
+}
+
+func (c *InternalController) HandleAnalysis(ctx *fiber.Ctx) error {
+	var result types.AnalysisResult
+	if err := ctx.BodyParser(&result); err != nil {
+		return ctx.Status(fiber.StatusBadRequest).SendString("Invalid payload")
+	}
+
+	jsonMsg, _ := json.Marshal(result)
+	utils.Global.Send(result.ReqId, string(jsonMsg))
 	return ctx.SendStatus(fiber.StatusOK)
 }
