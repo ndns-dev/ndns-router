@@ -1,9 +1,7 @@
 package utils
 
 import (
-	"fmt"
 	"sync/atomic"
-	"time"
 )
 
 // Generate 요청 id 생성 및 라운드 로빈 인덱스 반환
@@ -18,15 +16,6 @@ func NewGenerate() *Generate {
 		requestCounter: 0,
 		currentIndex:   0,
 	}
-}
-
-// 요청 id 생성
-func (g *Generate) GenerateRequestId() string {
-	count := atomic.AddUint64(&g.requestCounter, 1)
-	return fmt.Sprintf("REQ-%s-%06d",
-		time.Now().Format("20060102-150405"),
-		count,
-	)
 }
 
 // 다음 라운드 로빈 인덱스 반환
