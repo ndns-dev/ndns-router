@@ -9,9 +9,10 @@ func SendError(ctx *fiber.Ctx, status int, message string) error {
 	})
 }
 
-func SendSuccess(ctx *fiber.Ctx, data interface{}) error {
+func SendSuccess(ctx *fiber.Ctx, data interface{}, message string) error {
 	return ctx.JSON(fiber.Map{
 		"data":    data,
 		"success": true,
+		"message": message,
 	})
 }
