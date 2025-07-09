@@ -35,7 +35,6 @@ func SetupRoutes(app *fiber.App) error {
 	}
 
 	external := app.Group("/external")
-	external.Use(middlewares.JwtMiddleware())
 	if err := SetupExternalRoutes(external, serverService); err != nil {
 		return err
 	}
