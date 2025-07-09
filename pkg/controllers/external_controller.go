@@ -2,13 +2,13 @@ package controllers
 
 import (
 	"bufio"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/sh5080/ndns-router/pkg/interfaces"
 	"github.com/sh5080/ndns-router/pkg/types"
+	"github.com/sh5080/ndns-router/pkg/types/dtos"
 	"github.com/sh5080/ndns-router/pkg/utils"
 	"github.com/valyala/fasthttp"
 )
@@ -45,10 +45,12 @@ func (c *ExternalController) GetActiveConnections(ctx *fiber.Ctx) error {
 
 	utils.Infof("[SSE] 활성 연결 조회 - 총 %d개의 연결", len(activeConnections))
 
-	return utils.SendSuccessData(ctx, fiber.Map{
-		"totalConnections": len(activeConnections),
-		"connections":      activeConnections,
-	})
+	activeConnectionsDto := dtos.ActiveConnections{
+		TotalConnections: len(activeConnections),
+		Connections:      activeConnections,
+	}
+
+	return utils.SendSuccessData(ctx, activeConnectionsDto)
 }
 
 // RegisterMessageChannel은 특정 reqId에 대한 메시지 채널을 등록합니다
@@ -111,10 +113,14 @@ func (c *ExternalController) SseHandler(ctx *fiber.Ctx) error {
 			c.UnregisterMessageChannel(reqId)
 			utils.Infof("[SSE] 스트림 종료, 채널 정리 완료 - reqId: %s", reqId)
 		}()
-
+		ssePayload := dtos.SsePayload{
+			Type: dtos.SseConnect,
+			Data: map[string]interface{}{
+				"message": "SSE 연결됨",
+			},
+		}
 		// 초기 연결 메시지 전송
-		fmt.Fprintf(w, "event: connect\ndata: {\"type\":\"connected\",\"message\":\"SSE 연결됨\",\"reqId\":\"%s\"}\n\n", reqId)
-		if err := w.Flush(); err != nil {
+		if err := utils.SendSseEvent(w, &ssePayload); err != nil {
 			utils.Infof("[SSE] 초기 메시지 전송 실패 - reqId: %s, error: %v", reqId, err)
 			return
 		}
@@ -130,14 +136,24 @@ func (c *ExternalController) SseHandler(ctx *fiber.Ctx) error {
 					return
 				}
 				utils.Infof("[SSE] 클라이언트에게 결과 전송: %s", msg)
-				fmt.Fprintf(w, "event: message\ndata: {\"type\":\"analysisComplete\",\"post\":%s,\"reqId\":\"%s\"}\n\n", msg, reqId)
-				if err := w.Flush(); err != nil {
+				ssePayload := dtos.SsePayload{
+					Type: dtos.SseMessage,
+					Data: map[string]interface{}{
+						"message": msg,
+					},
+				}
+				if err := utils.SendSseEvent(w, &ssePayload); err != nil {
 					utils.Infof("[SSE] 클라이언트 연결 종료 (reqId: %s): %v", reqId, err)
 					return
 				}
 			case <-ticker.C:
-				fmt.Fprintf(w, "event: heartbeat\ndata: {\"type\":\"heartbeat\",\"time\":\"%v\",\"reqId\":\"%s\"}\n\n", time.Now().Format(time.RFC3339), reqId)
-				if err := w.Flush(); err != nil {
+				ssePayload := dtos.SsePayload{
+					Type: dtos.SseHeartbeat,
+					Data: map[string]interface{}{
+						"heartbeat": time.Now().Format(time.RFC3339),
+					},
+				}
+				if err := utils.SendSseEvent(w, &ssePayload); err != nil {
 					utils.Infof("[SSE] 하트비트 전송 실패 (reqId: %s): %v", reqId, err)
 					return
 				}
@@ -150,13 +166,8 @@ func (c *ExternalController) SseHandler(ctx *fiber.Ctx) error {
 
 // SendMessage는 특정 클라이언트에게 메시지를 전송하는 핸들러입니다
 func (c *ExternalController) SendMessage(ctx *fiber.Ctx) error {
-	// POST body에서 데이터 파싱
-	type MessageRequest struct {
-		ReqId   string `json:"reqId"`
-		Message string `json:"message"`
-	}
 
-	req := new(MessageRequest)
+	req := new(dtos.MessageRequest)
 	if err := ctx.BodyParser(req); err != nil {
 		return utils.SendError(ctx, fiber.StatusBadRequest, "잘못된 요청 형식")
 	}
@@ -173,10 +184,10 @@ func (c *ExternalController) SendMessage(ctx *fiber.Ctx) error {
 		select {
 		case info.Channel <- req.Message:
 			utils.Infof("[SSE] 메시지 전송 성공 (reqId: %s)", req.ReqId)
-			return utils.SendSuccessData(ctx, fiber.Map{
-				"reqId":             req.ReqId,
-				"connectedAt":       info.ConnectedAt.Format(time.RFC3339),
-				"connectedDuration": time.Since(info.ConnectedAt).String(),
+			return utils.SendSuccessData(ctx, types.Connection{
+				ReqId:             req.ReqId,
+				ConnectedAt:       info.ConnectedAt,
+				ConnectedDuration: time.Since(info.ConnectedAt),
 			})
 		default:
 			utils.Infof("[SSE] 메시지 전송 실패 (reqId: %s) - 채널이 가득 참", req.ReqId)

@@ -1,7 +1,12 @@
 package utils
 
 import (
+	"bufio"
+	"encoding/json"
+	"fmt"
 	"sync"
+
+	"github.com/sh5080/ndns-router/pkg/types/dtos"
 )
 
 type SseManager struct {
@@ -49,4 +54,21 @@ func (s *SseManager) Send(reqId string, msg string) {
 	} else {
 		Warnf("[SSE] 채널을 찾을 수 없음 - reqId: %s", reqId)
 	}
+}
+
+func SendSseEvent(w *bufio.Writer, payload *dtos.SsePayload) error {
+	// 메시지를 JSON으로 직렬화
+	data, err := json.Marshal(payload.Data)
+	if err != nil {
+		return fmt.Errorf("JSON 직렬화 실패: %v", err)
+	}
+
+	// SSE 포맷으로 메시지 작성
+	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", payload.Type, string(data))
+	if err != nil {
+		return fmt.Errorf("SSE 메시지 전송 실패: %v", err)
+	}
+
+	// 즉시 flush
+	return w.Flush()
 }
