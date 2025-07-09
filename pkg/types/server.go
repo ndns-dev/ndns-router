@@ -80,3 +80,15 @@ var JwtEligiblePathsMap = map[JwtEligiblePaths]bool{
 func IsJwtEligible(path string) bool {
 	return JwtEligiblePathsMap[JwtEligiblePaths(path)]
 }
+
+// ConnectionInfo는 SSE 연결 정보를 저장합니다
+type ConnectionInfo struct {
+	Channel     chan string
+	ConnectedAt time.Time
+}
+
+type Connection struct {
+	ReqId             string
+	ConnectedAt       time.Time
+	ConnectedDuration time.Duration
+}
