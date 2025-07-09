@@ -39,10 +39,7 @@ type MetricsUpdateRequest struct {
 func (c *MetricsController) HandleMetricsUpdate(ctx *fiber.Ctx) error {
 	var req MetricsUpdateRequest
 	if err := ctx.BodyParser(&req); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"success": false,
-			"message": "잘못된 요청 형식입니다",
-		})
+		return utils.SendError(ctx, fiber.StatusBadRequest, "잘못된 요청 형식입니다")
 	}
 
 	// 수신된 메트릭 데이터 로깅
@@ -67,10 +64,7 @@ func (c *MetricsController) HandleMetricsUpdate(ctx *fiber.Ctx) error {
 			LastUpdated:   time.Now(),
 		}); err != nil {
 			utils.Errorf("서버 자동 등록 실패 (%s): %v", req.AppName, err)
-			return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"success": false,
-				"message": "서버 등록 실패",
-			})
+			return utils.SendError(ctx, fiber.StatusInternalServerError, "서버 등록 실패")
 		}
 		utils.Infof("새 서버가 자동 등록됨: %s (%s)", req.AppName, req.ServerURL)
 	}
@@ -85,14 +79,8 @@ func (c *MetricsController) HandleMetricsUpdate(ctx *fiber.Ctx) error {
 
 	if err := c.serverService.AddServer(server); err != nil {
 		utils.Errorf("메트릭 업데이트 실패 (%s): %v", req.AppName, err)
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"success": false,
-			"message": "메트릭 업데이트 실패",
-		})
+		return utils.SendError(ctx, fiber.StatusInternalServerError, "메트릭 업데이트 실패")
 	}
 
-	return ctx.JSON(fiber.Map{
-		"success": true,
-		"message": "메트릭이 성공적으로 업데이트되었습니다",
-	})
+	return utils.SendSuccessMessage(ctx, "메트릭이 성공적으로 업데이트되었습니다")
 }

@@ -45,10 +45,10 @@ func (c *ExternalController) GetActiveConnections(ctx *fiber.Ctx) error {
 
 	utils.Infof("[SSE] 활성 연결 조회 - 총 %d개의 연결", len(activeConnections))
 
-	return utils.SendSuccess(ctx, fiber.Map{
+	return utils.SendSuccessData(ctx, fiber.Map{
 		"totalConnections": len(activeConnections),
 		"connections":      activeConnections,
-	}, "활성 연결 조회 성공")
+	})
 }
 
 // RegisterMessageChannel은 특정 reqId에 대한 메시지 채널을 등록합니다
@@ -173,11 +173,11 @@ func (c *ExternalController) SendMessage(ctx *fiber.Ctx) error {
 		select {
 		case info.Channel <- req.Message:
 			utils.Infof("[SSE] 메시지 전송 성공 (reqId: %s)", req.ReqId)
-			return utils.SendSuccess(ctx, fiber.Map{
+			return utils.SendSuccessData(ctx, fiber.Map{
 				"reqId":             req.ReqId,
 				"connectedAt":       info.ConnectedAt.Format(time.RFC3339),
 				"connectedDuration": time.Since(info.ConnectedAt).String(),
-			}, "메시지가 성공적으로 전송되었습니다")
+			})
 		default:
 			utils.Infof("[SSE] 메시지 전송 실패 (reqId: %s) - 채널이 가득 참", req.ReqId)
 			return utils.SendError(ctx, fiber.StatusServiceUnavailable, "메시지 전송 실패 - 채널이 가득 참")

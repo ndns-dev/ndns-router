@@ -25,11 +25,7 @@ func NewInternalController(serverService interfaces.ServerService) *InternalCont
 func (c *InternalController) HandleOptimalServer(ctx *fiber.Ctx) error {
 	var request types.OptimalServerRequest
 	if err := ctx.BodyParser(&request); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"success": false,
-			"message": "잘못된 요청 형식입니다",
-			"error":   err.Error(),
-		})
+		return utils.SendError(ctx, fiber.StatusBadRequest, "잘못된 요청 형식입니다")
 	}
 
 	utils.Infof("서버 정보 수신 (총 %d개):", len(request.Servers))
@@ -65,17 +61,17 @@ func (c *InternalController) HandleOptimalServer(ctx *fiber.Ctx) error {
 		}
 	}
 
-	return ctx.SendStatus(fiber.StatusOK)
+	return utils.SendSuccessMessage(ctx, "최적 서버 등록 완료")
 }
 
 func (c *InternalController) HandleAnalysis(ctx *fiber.Ctx) error {
 	var result types.AnalysisResult
 	if err := ctx.BodyParser(&result); err != nil {
-		return ctx.Status(fiber.StatusBadRequest).SendString("Invalid payload")
+		return utils.SendError(ctx, fiber.StatusBadRequest, "Invalid payload")
 	}
 	utils.Infof("\n=== AnalyzeCycle 분석결과 api서버에서 수신 ===\n%+v\n", result)
 
 	jsonMsg, _ := json.Marshal(result)
 	utils.Global.Send(result.ReqId, string(jsonMsg))
-	return ctx.SendStatus(fiber.StatusOK)
+	return utils.SendSuccessMessage(ctx, "분석결과 수신 완료")
 }

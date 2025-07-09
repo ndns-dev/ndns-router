@@ -27,10 +27,7 @@ func (c *ServerController) HandleServersStatus(ctx *fiber.Ctx) error {
 	servers, err := c.serverService.GetAllServers()
 	if err != nil {
 		utils.Errorf("서버 목록 조회 실패: %v", err)
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"success": false,
-			"message": "서버 목록 조회 실패",
-		})
+		return utils.SendError(ctx, fiber.StatusInternalServerError, "서버 목록 조회 실패")
 	}
 
 	// 서버 상태 정보 구성
@@ -87,37 +84,22 @@ func (c *ServerController) HandleAddServer(ctx *fiber.Ctx) error {
 		CurrentStatus: string(types.StatusUnknown),
 		LastUpdated:   time.Now(),
 	}); err != nil {
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"success": false,
-			"message": "서버 등록 실패: " + err.Error(),
-		})
+		return utils.SendError(ctx, fiber.StatusInternalServerError, "서버 등록 실패: "+err.Error())
 	}
 
-	return ctx.JSON(fiber.Map{
-		"success": true,
-		"message": "서버가 등록되었습니다",
-	})
+	return utils.SendSuccessMessage(ctx, "서버가 등록되었습니다")
 }
 
 // HandleRemoveServer는 등록된 서버를 제거합니다
 func (c *ServerController) HandleRemoveServer(ctx *fiber.Ctx) error {
 	serverId := ctx.Query("serverId")
 	if serverId == "" {
-		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"success": false,
-			"message": "serverId는 필수 값입니다",
-		})
+		return utils.SendError(ctx, fiber.StatusBadRequest, "serverId는 필수 값입니다")
 	}
 
 	if err := c.serverService.RemoveServer(serverId); err != nil {
-		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"success": false,
-			"message": "서버 제거 실패: " + err.Error(),
-		})
+		return utils.SendError(ctx, fiber.StatusInternalServerError, "서버 제거 실패: "+err.Error())
 	}
 
-	return ctx.JSON(fiber.Map{
-		"success": true,
-		"message": "서버가 제거되었습니다",
-	})
+	return utils.SendSuccessMessage(ctx, "서버가 제거되었습니다")
 }
