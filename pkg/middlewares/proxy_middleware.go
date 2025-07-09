@@ -106,7 +106,7 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 		utils.Infof("[%s] 서버 시도: %s (점수: %.2f)", requestId, server.ServerId, server.Metrics.Score)
 
 		// test url
-		server.ServerUrl = "https://gratefully-genuine-katydid.ngrok-free.app"
+		server.ServerUrl = configs.GetConfig().App.TestUrl
 		utils.Infof("강제 테스트 url: %s", server.ServerUrl)
 		// [1] URL 정규화
 		targetURL := server.ServerUrl

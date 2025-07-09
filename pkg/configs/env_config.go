@@ -15,6 +15,7 @@ type EnvConfig struct {
 		AppEnv string `env:"APP_ENV,required"`
 	}
 	App struct {
+		TestUrl   string `env:"TEST_URL,required"`
 		Url       string `env:"URL,required"`
 		JwtSecret string `env:"JWT_SECRET,required"`
 	}
