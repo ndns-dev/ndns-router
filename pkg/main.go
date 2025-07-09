@@ -10,7 +10,6 @@ import (
 	"syscall"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/sh5080/ndns-router/pkg/configs"
 	"github.com/sh5080/ndns-router/pkg/routers"
@@ -39,11 +38,6 @@ func main() {
 		ReadBufferSize: 16384,            // 16KB
 		JSONDecoder:    json.Unmarshal,
 	})
-	app.Use(cors.New(cors.Config{
-		AllowOrigins:     config.App.Url,
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, ngrok-skip-browser-warning",
-		AllowCredentials: true,
-	}))
 	app.Use(logger.New())
 
 	// 라우터 설정
