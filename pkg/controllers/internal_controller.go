@@ -73,6 +73,7 @@ func (c *InternalController) HandleAnalysis(ctx *fiber.Ctx) error {
 	if err := ctx.BodyParser(&result); err != nil {
 		return ctx.Status(fiber.StatusBadRequest).SendString("Invalid payload")
 	}
+	utils.Infof("\n=== AnalyzeCycle 분석결과 api서버에서 수신 ===\n%+v\n", result)
 
 	jsonMsg, _ := json.Marshal(result)
 	utils.Global.Send(result.ReqId, string(jsonMsg))
