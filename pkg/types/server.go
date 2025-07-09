@@ -91,4 +91,5 @@ type Connection struct {
 	ReqId             string
 	ConnectedAt       time.Time
 	ConnectedDuration time.Duration
+	ExpiresIn         time.Duration
 }
