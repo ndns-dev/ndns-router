@@ -85,6 +85,9 @@ func IsJwtEligible(path string) bool {
 type ConnectionInfo struct {
 	Channel     chan string
 	ConnectedAt time.Time
+	LastActive  time.Time
+	ExpiresAt   time.Time
+	Done        chan struct{}
 }
 
 type Connection struct {
