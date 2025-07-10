@@ -116,7 +116,8 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 		targetURL = strings.TrimSuffix(targetURL, "/")
 
 		// [2] 전체 URL 구성
-		fullURL := targetURL + ctx.Path()
+		endpoint := ctx.Path()
+		fullURL := targetURL + endpoint
 		if ctx.Request().URI().QueryString() != nil {
 			fullURL += "?" + string(ctx.Request().URI().QueryString())
 		}
@@ -143,12 +144,14 @@ func NewProxyMiddleware(serverService interfaces.ServerService) fiber.Handler {
 		ctx.Response().Header.Set("X-Served-By", server.ServerId)
 		ctx.Response().Header.Set("X-Server-Score", fmt.Sprintf("%.2f", server.Metrics.Score))
 		// [7] jwt 허용 경로일 경우 토큰 생성
-		fmt.Println("ctx.Path(): ", ctx.Path())
-		if types.IsJwtEligible(ctx.Path()) {
-			if token, err := utils.GenerateSseToken(requestId, 10); err == nil {
-				ctx.Response().Header.Set("X-Sse-Token", token)
-				ctx.Response().Header.Set("X-Sse-Id", uuid.New().String())
-				ctx.Response().Header.Set("Access-Control-Expose-Headers", "X-Req-Id, X-Sse-Token, X-Sse-Id")
+		if types.IsJwtEligible(endpoint) {
+			if strings.HasPrefix(endpoint, "/api/v1/search") {
+				if token, err := utils.GenerateSseToken(requestId, 10); err == nil {
+
+					ctx.Response().Header.Set("X-Sse-Token", token)
+					ctx.Response().Header.Set("X-Sse-Id", uuid.New().String())
+					ctx.Response().Header.Set("Access-Control-Expose-Headers", "X-Req-Id, X-Sse-Token, X-Sse-Id")
+				}
 			}
 		}
 		return nil
