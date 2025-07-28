@@ -2,7 +2,35 @@ server {
     listen 8080;
     server_name route.ndns.site;
 
+    # Block common unwanted requests
+    location = /favicon.ico {
+        log_not_found off;
+        access_log off;
+        return 204; # No Content
+    }
+
+    location = /robots.txt {
+        log_not_found off;
+        access_log off;
+        return 200 "User-agent: *\nDisallow: /";
+    }
+
+    # Deny access to sensitive files
+    location ~ /\.env {
+        return 403;
+    }
+
+    # Block requests trying to exploit PHP vulnerabilities
+    location ~* /(eval-stdin\.php|boaform|phpunit) {
+        return 403;
+    }
+
     location / {
+        # Return 404 for root, if it's not a valid endpoint
+        if ($request_uri = '/') {
+            return 404;
+        }
+
         proxy_pass http://127.0.0.1:{{PORT}};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
